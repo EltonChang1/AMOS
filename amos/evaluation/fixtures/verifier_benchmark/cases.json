@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "label_source": "Hand-authored engineering regression labels; not independently adjudicated research labels.",
+  "cases": [
+    {
+      "case_id": "valid_basic_ratio",
+      "category": "basic",
+      "expected_pass": true,
+      "sql": "SELECT COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false"
+    },
+    {
+      "case_id": "valid_count_if_qualified",
+      "category": "equivalent_metric",
+      "expected_pass": true,
+      "sql": "SELECT COUNT_IF(p.status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM payment_events p WHERE p.event_time BETWEEN TIMESTAMP '2026-07-07 14:00:00' AND TIMESTAMP '2026-07-07 20:00:00' AND 'production' = p.environment AND NOT p.is_test_account"
+    },
+    {
+      "case_id": "valid_alias_group_order",
+      "category": "alias",
+      "expected_pass": true,
+      "sql": "SELECT DATE_TRUNC('hour', event_time) AS event_hour, COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate, COUNT(*) AS total_attempts FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false GROUP BY event_hour ORDER BY total_attempts DESC"
+    },
+    {
+      "case_id": "valid_cte_outputs",
+      "category": "cte",
+      "expected_pass": true,
+      "sql": "WITH governed AS (SELECT event_time, status FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false) SELECT DATE_TRUNC('hour', event_time) AS event_hour, COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM governed GROUP BY event_hour"
+    },
+    {
+      "case_id": "valid_time_conditioned_denominator",
+      "category": "conditional_aggregate",
+      "expected_pass": true,
+      "sql": "SELECT COUNT(*) FILTER (WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND status = 'failure')::DOUBLE / NULLIF(COUNT(*) FILTER (WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00'), 0) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false"
+    },
+    {
+      "case_id": "valid_case_sum_numerator",
+      "category": "equivalent_metric",
+      "expected_pass": true,
+      "sql": "SELECT SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END)::DOUBLE / COUNT(*) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account IS FALSE"
+    },
+    {
+      "case_id": "invalid_stale_column",
+      "category": "schema",
+      "expected_pass": false,
+      "sql": "SELECT failure_reason, COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false GROUP BY failure_reason"
+    },
+    {
+      "case_id": "invalid_unknown_column_in_cte",
+      "category": "schema",
+      "expected_pass": false,
+      "sql": "WITH governed AS (SELECT nonexistent_source_column AS segment, event_time, status FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false) SELECT segment, COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM governed GROUP BY segment"
+    },
+    {
+      "case_id": "invalid_blocked_column",
+      "category": "permission",
+      "expected_pass": false,
+      "sql": "SELECT customer_email, COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false GROUP BY customer_email"
+    },
+    {
+      "case_id": "invalid_missing_test_filter",
+      "category": "metric",
+      "expected_pass": false,
+      "sql": "SELECT COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production'"
+    },
+    {
+      "case_id": "invalid_missing_production_filter",
+      "category": "metric",
+      "expected_pass": false,
+      "sql": "SELECT COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND is_test_account = false"
+    },
+    {
+      "case_id": "invalid_processing_time_only",
+      "category": "temporal",
+      "expected_pass": false,
+      "sql": "SELECT COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / COUNT(*) AS failure_rate FROM payment_events WHERE processing_time >= TIMESTAMP '2026-07-07 14:00:00' AND processing_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false"
+    },
+    {
+      "case_id": "invalid_success_numerator",
+      "category": "metric",
+      "expected_pass": false,
+      "sql": "SELECT COUNT(*) FILTER (WHERE status = 'success')::DOUBLE / COUNT(*) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false"
+    },
+    {
+      "case_id": "invalid_success_denominator",
+      "category": "metric",
+      "expected_pass": false,
+      "sql": "SELECT COUNT(*) FILTER (WHERE status = 'failure')::DOUBLE / NULLIF(COUNT(*) FILTER (WHERE status = 'success'), 0) AS failure_rate FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00' AND environment = 'production' AND is_test_account = false"
+    },
+    {
+      "case_id": "invalid_write_statement",
+      "category": "safety",
+      "expected_pass": false,
+      "sql": "DELETE FROM payment_events WHERE event_time < TIMESTAMP '2026-07-07 14:00:00'"
+    },
+    {
+      "case_id": "invalid_comment_only_rules",
+      "category": "adversarial",
+      "expected_pass": false,
+      "sql": "SELECT 'status = failure, COUNT(*), environment = production, is_test_account = false' AS claimed_metric FROM payment_events WHERE event_time >= TIMESTAMP '2026-07-07 14:00:00' AND event_time < TIMESTAMP '2026-07-07 20:00:00'"
+    }
+  ]
+}

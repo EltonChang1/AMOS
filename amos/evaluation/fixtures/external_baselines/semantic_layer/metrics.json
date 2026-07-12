@@ -1,0 +1,46 @@
+{
+  "description": "MetricFlow / dbt-metrics shaped semantic-layer export. Not a hosted Looker or dbt Cloud product.",
+  "version": 2,
+  "metrics": [
+    {
+      "name": "payment_failure_rate",
+      "version": "v3",
+      "label": "Payment Failure Rate",
+      "type": "ratio",
+      "time_field": "event_time",
+      "numerator": {"sql": "COUNT(*) FILTER (WHERE status = 'failure')"},
+      "denominator": {"sql": "COUNT(*)"},
+      "filters": ["environment = 'production'", "is_test_account = false"],
+      "owner": "payments-platform",
+      "status": "active"
+    },
+    {
+      "name": "payment_failure_rate",
+      "version": "v2",
+      "label": "Payment Failure Rate (superseded)",
+      "type": "ratio",
+      "time_field": "processing_time",
+      "filters": [],
+      "status": "superseded",
+      "superseded_by": "payment_failure_rate.v3"
+    },
+    {
+      "name": "subscription_churn_rate",
+      "version": "v1",
+      "label": "Subscription Churn Rate",
+      "type": "ratio",
+      "time_field": "event_time",
+      "filters": ["environment = 'production'", "is_test_account = false"],
+      "status": "active"
+    },
+    {
+      "name": "warehouse_pick_accuracy",
+      "version": "v1",
+      "label": "Warehouse Pick Accuracy",
+      "type": "ratio",
+      "time_field": "event_time",
+      "filters": ["environment = 'production'", "is_test_location = false"],
+      "status": "active"
+    }
+  ]
+}

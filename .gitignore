@@ -1,0 +1,72 @@
+# macOS and editors
+.DS_Store
+.idea/
+.vscode/
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Generated local databases
+data/**/*.sqlite
+data/**/*.sqlite-*
+data/**/*.duckdb
+data/**/*.duckdb.wal
+
+# LaTeX build products (final PDFs under output/pdf are retained)
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+
+# Scratch output
+tmp/
+
+# Generated run artifacts: retain only the paper-facing aggregate evidence.
+artifacts/*
+!artifacts/evaluation/
+artifacts/evaluation/*
+!artifacts/evaluation/RESULTS.md
+!artifacts/evaluation/benchmark_suite.json
+!artifacts/evaluation/benchmark_suite_summary.md
+!artifacts/evaluation/extended_experiments.json
+!artifacts/evaluation/retrieval_engine_comparison_1k/
+!artifacts/evaluation/retrieval_engine_comparison_1k/**
+!artifacts/evaluation/retrieval_engine_comparison_10k/
+!artifacts/evaluation/retrieval_engine_comparison_10k/**
+!artifacts/evaluation/retrieval_engine_comparison_100k/
+!artifacts/evaluation/retrieval_engine_comparison_100k/**
+!artifacts/evaluation/systems_scale_10k/
+!artifacts/evaluation/systems_scale_10k/**
+!artifacts/evaluation/systems_scale/
+!artifacts/evaluation/systems_scale/**
+!artifacts/evaluation/systems_scale_1m/
+!artifacts/evaluation/systems_scale_1m/**
+
+# Working notes and duplicate manuscript variants
+AMOS_revised_professional.*
+HARSH_PAPER_CRITIQUE.md
+PAPER_REVIEW_ACTION_PLAN.md
+PUBLICATION_PROGRESS_AND_NEXT_STEPS.md
+PUBLICATION_READINESS_STATUS.md
+PVLDB_2027_SUBMISSION_PLAN.md

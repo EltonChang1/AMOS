@@ -1,0 +1,74 @@
+{
+  "study_id": "replace-with-claim-study-id",
+  "protocol_version": 1,
+  "preregistration_sha256": "24a74ee081995e378b9f68f45bfe48da60cf63a2a849cbef08a0b8b09aa7ca74",
+  "annotation_guidelines_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "implementation_team_ids": [
+    "implementer-001"
+  ],
+  "artifacts": [
+    {
+      "artifact_id": "replace-artifact-001",
+      "source_group_id": "replace-source-group",
+      "author_group_id": "replace-author-group",
+      "domain": "payment_failure",
+      "artifact_kind": "report",
+      "split": "test",
+      "synthetic": false,
+      "raw_path": "raw/artifact-001.txt",
+      "raw_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "annotations": [
+        {
+          "annotator_id": "claim-annotator-001",
+          "labels": [
+            {
+              "span_start": 0,
+              "span_end": 10,
+              "text": "REPLACE ME",
+              "claim_type": "numeric",
+              "requires_review": false,
+              "evidence_requirements": [
+                "query",
+                "metric",
+                "data_state"
+              ]
+            }
+          ]
+        },
+        {
+          "annotator_id": "claim-annotator-002",
+          "labels": [
+            {
+              "span_start": 0,
+              "span_end": 10,
+              "text": "REPLACE ME",
+              "claim_type": "numeric",
+              "requires_review": false,
+              "evidence_requirements": [
+                "query",
+                "metric",
+                "data_state"
+              ]
+            }
+          ]
+        }
+      ],
+      "adjudicator_id": "claim-adjudicator-001",
+      "adjudicated_labels": [
+        {
+          "span_start": 0,
+          "span_end": 10,
+          "text": "REPLACE ME",
+          "claim_type": "numeric",
+          "requires_review": false,
+          "evidence_requirements": [
+            "query",
+            "metric",
+            "data_state"
+          ],
+          "rationale": "Replace with an independent adjudication rationale."
+        }
+      ]
+    }
+  ]
+}

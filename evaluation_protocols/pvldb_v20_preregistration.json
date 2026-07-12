@@ -1,0 +1,215 @@
+{
+  "schema_version": "amos.pvldb_v20_preregistration.v1",
+  "status": "frozen_before_external_collection",
+  "frozen_date": "2026-07-12",
+  "venue": {
+    "name": "Proceedings of the VLDB Endowment",
+    "volume": 20,
+    "conference": "VLDB 2027",
+    "category": "Regular Research Paper - Systems",
+    "internal_abstract_deadline": "2026-12-25",
+    "internal_submission_deadline": "2027-01-01T17:00:00-08:00",
+    "venue_final_initial_deadline": "2027-03-01T17:00:00-08:00",
+    "content_page_limit": 12,
+    "review_model": "single_blind"
+  },
+  "frozen_local_baseline": {
+    "bundle": "artifacts/evaluation/final_paper_run_v7",
+    "evaluation_source_sha256": "ea8cf3090384d837e5f2f47588f2b8c6e82fa613327b90181bc826578fe81605",
+    "paper_pdf_sha256": "27992e93885d69dd4b098b0ce52afb8ff9db5cb65505c7af41132152fbdf2735",
+    "bundle_manifest_sha256": "a00624c9a5f5428e4a8231781fab82d9777f77ff7ddf6503321db036e5e69260"
+  },
+  "research_questions": {
+    "RQ1": "Can AMOS detect analytical-state violations without rejecting valid analytical SQL?",
+    "RQ2": "Does AMOS improve safe and correct completion for live analytical agents under matched model and tool access?",
+    "RQ3": "Does claim-level provenance improve reviewer error detection or reduce audit time?",
+    "RQ4": "What latency, throughput, storage, consistency, and failure-recovery cost is imposed by AMOS at production-like scale?"
+  },
+  "independent_task_study": {
+    "domains": [
+      "payment_failure",
+      "subscription_churn",
+      "warehouse_quality"
+    ],
+    "tasks_per_domain": 50,
+    "total_tasks": 150,
+    "minimum_task_authors": 3,
+    "annotators_per_task": 2,
+    "separate_adjudicator_required": true,
+    "prompt_frames_per_task": 3,
+    "model_family_count": 3,
+    "model_selection_rule": "For each of OpenAI, Anthropic, and Google, freeze the exact generally available non-preview model with the strongest documented tool-use capability that is accessible on the configuration-freeze date. Record provider model IDs, versions, parameters, and pricing before the first task. No model substitution is allowed after outputs are opened.",
+    "primary_runtime_arms": [
+      "amos",
+      "matched_agent_without_amos"
+    ],
+    "secondary_arms": [
+      "permission_filtered_rag",
+      "semantic_catalog_agent",
+      "long_context_agent",
+      "production_faithful_external_system"
+    ],
+    "intended_primary_executions": 2700,
+    "statistical_unit": "independent_task",
+    "primary_endpoint": "safe_and_correct_completion",
+    "secondary_endpoints": [
+      "completed_and_correct",
+      "analytical_correctness",
+      "permission_safety",
+      "unsupported_claim_rate",
+      "review_obligation_precision",
+      "review_obligation_recall",
+      "provenance_correctness",
+      "replay_success",
+      "repair_success",
+      "latency_seconds",
+      "input_tokens",
+      "output_tokens",
+      "monetary_cost"
+    ],
+    "timeout_rule": "Use one frozen per-call timeout and one frozen end-to-end timeout for all matched arms.",
+    "retry_rule": "Retry only transport/provider failures up to the frozen provider-neutral retry budget. Preserve every attempt. Model, verifier, execution, and grading failures are never retried as transport failures.",
+    "missing_rule": "Every intended execution remains in the denominator. Provider failures are missing executions and are reported by arm, model, task, and prompt frame.",
+    "analysis": {
+      "primary_contrast": "amos_minus_matched_agent_without_amos",
+      "interval": "two_sided_95_percent_task_cluster_bootstrap",
+      "bootstrap_replicates": 10000,
+      "hierarchical_model": "logistic_mixed_effects_with_task_and_author_random_intercepts_and_system_model_prompt_fixed_effects",
+      "multiple_comparison_correction": "holm_for_secondary_confirmatory_contrasts",
+      "descriptive_reporting": "publish_all_task_level_outcomes_and_failure_categories"
+    }
+  },
+  "verifier_study": {
+    "total_cases": 400,
+    "valid_cases": 200,
+    "invalid_cases": 200,
+    "independent_authorship_required": true,
+    "double_annotation_required": true,
+    "construct_families": [
+      "aliases_and_derived_columns",
+      "ctes_and_nested_subqueries",
+      "joins_windows_and_correlated_subqueries",
+      "grouping_denominators_and_conditional_aggregates",
+      "temporal_types_and_dialects",
+      "schema_metric_and_permission_violations",
+      "comments_strings_obfuscation_and_unsafe_operations"
+    ],
+    "primary_metrics": [
+      "valid_query_acceptance",
+      "invalid_query_rejection",
+      "false_positive_rate",
+      "false_negative_rate",
+      "repair_success",
+      "repair_induced_violation_rate"
+    ]
+  },
+  "claim_study": {
+    "minimum_claims": 600,
+    "minimum_source_artifacts": 120,
+    "double_annotation_required": true,
+    "separate_adjudicator_required": true,
+    "split_unit": "source_artifact_and_author",
+    "artifact_kinds": [
+      "report",
+      "notebook",
+      "slide",
+      "chart_annotation",
+      "dashboard_text",
+      "table_cell",
+      "fragment"
+    ],
+    "required_language_phenomena": [
+      "hedged_claim",
+      "forecast",
+      "comparison",
+      "causal_claim"
+    ],
+    "baseline_families": [
+      "regex",
+      "prompted_llm",
+      "structured_output_llm",
+      "competitive_supervised_model"
+    ],
+    "primary_metrics": [
+      "exact_span_f1",
+      "claim_type_macro_f1",
+      "review_obligation_f1",
+      "unsupported_claim_f1",
+      "evidence_link_f1"
+    ]
+  },
+  "red_team_study": {
+    "minimum_independent_testers": 3,
+    "minimum_attack_cases": 120,
+    "attack_families": [
+      "direct_prompt_injection",
+      "indirect_prompt_injection",
+      "cross_user_leakage",
+      "malicious_authoritative_source",
+      "permission_revocation",
+      "provenance_expansion_leakage",
+      "timing_or_filtered_result_inference",
+      "multi_turn_memory_poisoning"
+    ],
+    "primary_metric": "attack_success_rate",
+    "paired_utility_metric": "safe_and_correct_completion_on_matched_benign_tasks"
+  },
+  "human_audit_study": {
+    "minimum_participants": 36,
+    "design": "within_participant_randomized_counterbalanced",
+    "conditions": [
+      "amos_claim_level_provenance",
+      "ordinary_citations_and_logs"
+    ],
+    "primary_outcomes": [
+      "error_detection_rate",
+      "audit_time_seconds"
+    ],
+    "secondary_outcomes": [
+      "false_alarm_rate",
+      "confidence",
+      "replay_success",
+      "usability"
+    ],
+    "pre_recruitment_gate": "ethics_consent_privacy_compensation_and_exclusion_rules_approved"
+  },
+  "systems_study": {
+    "minimum_external_systems": 1,
+    "external_system_requirement": "deployed_or_production_faithful_self_hosted_with_native_features_enabled",
+    "retrieval_engines": [
+      "bm25",
+      "vector",
+      "hybrid"
+    ],
+    "corpus_requirement": "independently_labeled_diverse_non_templated_content",
+    "required_measurements": [
+      "retrieval_relevance",
+      "p50_p95_p99_latency",
+      "throughput",
+      "concurrent_full_agent_reads_and_writes",
+      "policy_churn",
+      "schema_and_metric_invalidation",
+      "retention_deletion_and_redaction",
+      "failure_recovery",
+      "storage_cpu_memory_and_monetary_cost"
+    ]
+  },
+  "headline_acceptance_gates": {
+    "paired_primary_effect": "two_sided_95_percent_task_resampled_interval_for_safe_and_correct_completion_excludes_zero_in_favor_of_amos",
+    "utility_noninferiority_margin": -0.05,
+    "minimum_valid_query_acceptance": 0.95,
+    "minimum_invalid_query_rejection": 0.95,
+    "maximum_repair_induced_violation_rate": 0.02,
+    "observed_permission_leaks": 0,
+    "minimum_review_obligation_recall": 0.9,
+    "minimum_review_obligation_precision": 0.85,
+    "claim_evidence_link_gate": "exceed_strongest_preregistered_baseline_or_remove_headline_claim",
+    "human_audit_gate": "improve_one_primary_outcome_without_credible_degradation_on_the_other"
+  },
+  "change_control": {
+    "after_labels_revealed": "No task-specific prompt, verifier, retrieval, metric, or scoring change is permitted.",
+    "protocol_deviation_rule": "Preserve and report every deviation with timestamp, rationale, affected units, and analysis impact.",
+    "new_bug_rule": "Fixes discovered after unblinding require a new independently authored holdout set for confirmatory claims.",
+    "exclusion_rule": "Only preregistered protocol violations may be excluded from primary analysis; all excluded units remain in a public flow table."
+  }
+}

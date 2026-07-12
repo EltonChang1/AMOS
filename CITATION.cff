@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use AMOS, please cite this manuscript."
+title: "AMOS: Enforcing Analytical-State Invariants for LLM Data Agents"
+type: software
+authors:
+  - family-names: Chang
+    given-names: Elton
+repository-code: "https://github.com/EltonChang1/AMOS"
+url: "https://github.com/EltonChang1/AMOS"
+date-released: 2026-07-12
+version: 0.1.0

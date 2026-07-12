@@ -1,0 +1,36 @@
+{
+  "study_id": "replace-with-product-study-id",
+  "protocol_version": 1,
+  "task_label_source": "evidence/holdout/manifest.json",
+  "runs": [
+    {
+      "run_id": "replace-run-001",
+      "task_id": "replace-task-001",
+      "scenario": "payment_failure",
+      "product_name": "replace-product-name",
+      "product_version": "replace-exact-version",
+      "deployment_mode": "self_hosted_product",
+      "system_category": "agent",
+      "user_id": "replace-principal",
+      "permissions": [
+        "replace-permission"
+      ],
+      "configuration_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "raw_evidence_path": "raw/run-001.json",
+      "raw_evidence_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "latency_seconds": 0.0,
+      "token_usage": {},
+      "cost_usd": null,
+      "metrics": {
+        "task_correctness": false,
+        "sql_validity": false,
+        "metric_correctness": false,
+        "schema_correctness": false,
+        "permission_safety": false,
+        "provenance_coverage": 0.0,
+        "replay_success": false,
+        "review_obligation_recall": 0.0
+      }
+    }
+  ]
+}

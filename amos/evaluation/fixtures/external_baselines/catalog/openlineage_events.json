@@ -1,0 +1,92 @@
+{
+  "description": "OpenLineage-shaped run events for local catalog/lineage adapter. Not a DataHub or Marquez deployment.",
+  "events": [
+    {
+      "eventType": "COMPLETE",
+      "eventTime": "2026-07-07T20:05:00Z",
+      "run": {"runId": "payment-spike-analysis-492"},
+      "job": {"namespace": "amos-eval", "name": "payment_failure_summary"},
+      "inputs": [
+        {
+          "namespace": "duckdb",
+          "name": "payment_events",
+          "facets": {
+            "schema": {
+              "_producer": "amos-eval",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/SchemaDatasetFacet.json",
+              "fields": [
+                {"name": "event_time", "type": "TIMESTAMP"},
+                {"name": "status", "type": "VARCHAR"},
+                {"name": "error_code", "type": "VARCHAR"},
+                {"name": "is_test_account", "type": "BOOLEAN"},
+                {"name": "traffic_type", "type": "VARCHAR"}
+              ]
+            },
+            "version": {
+              "_producer": "amos-eval",
+              "datasetVersion": "payment_events:v2"
+            }
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "artifacts",
+          "name": "payment_failure_summary",
+          "facets": {
+            "dataSource": {
+              "_producer": "amos-eval",
+              "name": "amos-artifacts",
+              "uri": "file://artifacts"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "eventType": "COMPLETE",
+      "eventTime": "2026-07-06T12:00:00Z",
+      "run": {"runId": "schema-migrate-failure-reason-to-error-code"},
+      "job": {"namespace": "amos-eval", "name": "schema_migration"},
+      "inputs": [
+        {
+          "namespace": "duckdb",
+          "name": "payment_events",
+          "facets": {
+            "version": {
+              "_producer": "amos-eval",
+              "datasetVersion": "payment_events:v1"
+            }
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "duckdb",
+          "name": "payment_events",
+          "facets": {
+            "version": {
+              "_producer": "amos-eval",
+              "datasetVersion": "payment_events:v2"
+            },
+            "columnLineage": {
+              "_producer": "amos-eval",
+              "fields": {
+                "error_code": {
+                  "inputFields": [
+                    {
+                      "namespace": "duckdb",
+                      "name": "payment_events",
+                      "field": "failure_reason"
+                    }
+                  ],
+                  "transformationType": "RENAME"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

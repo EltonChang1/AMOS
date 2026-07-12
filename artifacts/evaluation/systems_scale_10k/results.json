@@ -1,0 +1,114 @@
+{
+  "claim_boundary": "This is evidence for correctness and local FTS5 scaling only. It does not establish distributed consistency, hosted-product performance, vector/hybrid retrieval quality, or production-scale robustness.",
+  "concurrent_reads": {
+    "completed": 64,
+    "errors": [],
+    "operations": 64,
+    "p50_latency_seconds": 0.350846,
+    "p95_latency_seconds": 0.40002,
+    "p99_latency_seconds": 0.423868,
+    "passed": 64,
+    "throughput_operations_per_second": 22.45,
+    "workers": 8
+  },
+  "configuration": {
+    "mixed_writes": 64,
+    "readers": 8,
+    "requested_memory_distractors": 10000,
+    "requested_provenance_edges": 10000,
+    "retrieval_engine": "SQLite FTS5 BM25 candidate generation plus governed reranking",
+    "retrieval_repeats": 30
+  },
+  "environment": {
+    "cpu_count": 8,
+    "machine": "arm64",
+    "max_resident_set_bytes": 248430592,
+    "platform": "macOS-14.8.4-arm64-arm-64bit",
+    "python": "3.11.2",
+    "sqlite": "3.39.4"
+  },
+  "generated_at": "2026-07-12T08:02:34.746174+00:00",
+  "memory_scale": {
+    "database_bytes_after_all_probes": 12434408,
+    "distractors_inserted": 10000,
+    "fts_rows": 10001,
+    "index_synchronized": true,
+    "seed_objects_per_second": 22232.28,
+    "seed_seconds": 0.449797,
+    "total_memory_objects": 10001
+  },
+  "mixed_read_write": {
+    "completed": 96,
+    "errors": [],
+    "passed": 96,
+    "read_latency": {
+      "max_seconds": 0.646809,
+      "p50_seconds": 0.489752,
+      "p95_seconds": 0.560904,
+      "p99_seconds": 0.620618
+    },
+    "read_operations": 32,
+    "throughput_operations_per_second": 57.27,
+    "workers": 10,
+    "write_latency": {
+      "max_seconds": 0.255157,
+      "p50_seconds": 0.00434,
+      "p95_seconds": 0.140021,
+      "p99_seconds": 0.230807
+    },
+    "write_operations": 64
+  },
+  "provenance_growth": {
+    "edges_inserted": 10000,
+    "insert_edges_per_second": 106126.04,
+    "insert_seconds": 0.094228,
+    "target_query_latency": {
+      "max_seconds": 0.000891,
+      "p50_seconds": 0.000747,
+      "p95_seconds": 0.000771,
+      "p99_seconds": 0.000857
+    },
+    "target_query_returned": 100,
+    "total_edges": 10000
+  },
+  "schema_version": "amos.systems_scale.v1",
+  "serial_retrieval": {
+    "max_latency_seconds": 0.051043,
+    "p50_latency_seconds": 0.045265,
+    "p95_latency_seconds": 0.046173,
+    "p99_latency_seconds": 0.049681,
+    "passed": 30,
+    "runs": 30,
+    "target_rank": 1
+  },
+  "statistical_scope": "Descriptive measurements over repeated operations on one local database; operations are not independent task samples and no population inference is made.",
+  "status": "completed",
+  "update_consistency": {
+    "metric_supersession": {
+      "passed": true,
+      "returned_ids": [
+        "memory_metric_zephyr_latency_v2",
+        "memory_scale_metric_00000189",
+        "memory_scale_metric_00000182",
+        "memory_scale_metric_00000175",
+        "memory_scale_metric_00000168",
+        "memory_scale_metric_00000161",
+        "memory_scale_metric_00000154",
+        "memory_scale_metric_00000147",
+        "memory_scale_metric_00000140",
+        "memory_scale_metric_00000133",
+        "memory_scale_metric_00000126",
+        "memory_scale_metric_00000119"
+      ],
+      "supersession_and_observation_seconds": 0.043815
+    },
+    "permission_revocation": {
+      "after_filtered": true,
+      "after_visible": false,
+      "before_visible": true,
+      "passed": true,
+      "revocation_and_observation_seconds": 0.002405
+    }
+  },
+  "wall_seconds": 6.545423
+}
