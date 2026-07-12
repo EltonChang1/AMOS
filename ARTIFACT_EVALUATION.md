@@ -28,8 +28,8 @@ After updating the manuscript only from that frozen bundle, attach and hash the 
 ```bash
 python3 -m amos.evaluation.finalize_submission \
   --run-dir artifacts/evaluation/final_paper_run \
-  --tex AMOS_revised_professional.tex \
-  --pdf AMOS_revised_professional.pdf \
+  --tex AMOS_memory_operating_layer.tex \
+  --pdf output/pdf/AMOS_paper.pdf \
   --supporting-doc PUBLICATION_READINESS_STATUS.md \
   --supporting-doc INDEPENDENT_EVALUATION_PROTOCOL.md \
   --supporting-doc EVIDENCE_INTAKE.md

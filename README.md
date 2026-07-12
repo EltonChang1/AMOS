@@ -1,14 +1,14 @@
-# AMOS
+# AMOS: A Memory Operating Layer for Continuous Large-Scale Data Analysis Agents
 
-AMOS is a governed analytical-memory runtime for LLM data agents. It keeps changing analytical state—schemas, metric definitions, snapshots or stream offsets, permissions, prior analyses, reviewer feedback, and provenance—outside the prompt as typed, versioned memory. A permission-first control loop selects context, reconciles conflicts, verifies computations, attaches claim-level support, and packages results for replay.
+AMOS is a memory operating layer between continuous data analysis agents and the systems they use. It keeps changing analytical state--schemas, metric definitions, snapshots or stream offsets, permissions, prior analyses, reviewer feedback, execution records, and provenance--outside the prompt as typed, versioned memory. A permission-first control loop selects bounded context, reconciles conflicts, verifies computations, attaches claim-level support, and packages results for replay while persistent state scales independently of model context.
 
 ## Paper
 
 - [Professor-review PDF](output/pdf/AMOS_paper.pdf)
-- [PVLDB LaTeX source](venue/pvldb2027/AMOS_pvldb2027.tex)
+- [Generic single-column LaTeX source](AMOS_memory_operating_layer.tex)
 - [Frozen external-evaluation protocol](evaluation_protocols/pvldb_v20_preregistration.json)
 
-The paper is formatted for PVLDB Volume 20 and contains 10 content pages plus references.
+The canonical manuscript uses a generic single-column article format for readable professor review and annotation. It is 21 pages including detailed tables and references.
 
 ## Results at a glance
 
@@ -69,8 +69,7 @@ The deterministic offline provider makes the core experiment reproducible withou
 ## Build the paper
 
 ```bash
-cd venue/pvldb2027
-latexmk -pdf -interaction=nonstopmode -halt-on-error AMOS_pvldb2027.tex
+latexmk -pdf -interaction=nonstopmode -halt-on-error AMOS_memory_operating_layer.tex
 ```
 
 ## Repository map
@@ -81,13 +80,13 @@ latexmk -pdf -interaction=nonstopmode -halt-on-error AMOS_pvldb2027.tex
 - `artifacts/evaluation/`: frozen aggregate results and retrieval/scale measurements
 - `evaluation_protocols/`: preregistered external-validation design
 - `external_studies/`: independent-study handoff and intake templates
-- `venue/pvldb2027/`: paper source and official venue template
+- `AMOS_memory_operating_layer.tex`: canonical single-column paper source
 
 ## Citation
 
 ```bibtex
 @article{chang2027amos,
-  title  = {AMOS: Enforcing Analytical-State Invariants for LLM Data Agents},
+  title  = {AMOS: A Memory Operating Layer for Continuous Large-Scale Data Analysis Agents},
   author = {Chang, Elton},
   year   = {2027},
   note   = {Manuscript},

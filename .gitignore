@@ -38,6 +38,7 @@ data/**/*.duckdb.wal
 *.out
 *.run.xml
 *.synctex.gz
+/AMOS_memory_operating_layer.pdf
 
 # Scratch output
 tmp/

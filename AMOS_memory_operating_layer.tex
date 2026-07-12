@@ -1,27 +1,30 @@
 
-\documentclass[sigconf,nonacm]{acmart}
+\documentclass[10pt]{article}
 
 % ============================================================
 % AMOS Paper Settings
 % ============================================================
+\usepackage[margin=1in]{geometry}
+\usepackage{times}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
 \usepackage{array}
 \usepackage{enumitem}
 \usepackage{longtable}
+\usepackage{graphicx}
 \usepackage{float}
+\usepackage{xcolor}
+\usepackage{url}
 \usepackage{xspace}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,fit,positioning}
-
-% PVLDB Volume 20 review metadata. DOI, issue, and pages are assigned after acceptance.
-\newcommand\vldbdoi{XX.XX/XXX.XX}
-\newcommand\vldbpages{XXX--XXX}
-\newcommand\vldbvolume{20}
-\newcommand\vldbissue{XX}
-\newcommand\vldbyear{2027}
-\newcommand\vldbauthors{Elton Chang}
-\newcommand\vldbtitle{AMOS: Enforcing Analytical-State Invariants for LLM Data Agents}
-\newcommand\vldbavailabilityurl{https://github.com/EltonChang1/AMOS}
-\newcommand\vldbpagestyle{plain}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{
+  pdftitle={AMOS: A Memory Operating Layer for Continuous Large-Scale Data Analysis Agents},
+  pdfauthor={Elton Chang}
+}
 
 \setlist[itemize]{leftmargin=1.2em, itemsep=0.2em, topsep=0.2em}
 \setlist[enumerate]{leftmargin=1.4em, itemsep=0.25em, topsep=0.25em}
@@ -41,78 +44,53 @@
 \newcommand{\pass}{\textbf{Pass}}
 \newcommand{\fail}{Fail}
 
-\title{AMOS: Enforcing Analytical-State Invariants for LLM Data Agents}
+\title{AMOS: A Memory Operating Layer for Continuous Large-Scale Data Analysis Agents}
 \author{Elton Chang}
-\affiliation{%
-  \institution{Independent Researcher}
-  \country{United States}
-}
+\date{}
 
 \begin{document}
-\sloppy
-
-\begin{abstract}
-LLM data agents can generate SQL, charts, and reports, yet reliable continuous analysis depends on state that changes outside the prompt: schemas, metric definitions, stream offsets, freshness, prior investigations, feedback, access policies, and provenance. A fluent answer can therefore be computed from stale, conflicting, or unauthorized context even when its SQL executes.
-
-\amos is a runtime layer that makes analytical state explicit and enforceable. It maintains bounded active context over persistent, versioned memory; filters permissions before context construction; reconciles temporal and authority conflicts; verifies SQL and metric rules before execution; and attaches claim-level provenance and replay metadata after execution. Raw data remains in existing warehouses, lakehouses, or event logs while \amos stores governed metadata and execution references.
-
-We formalize this abstraction and evaluate a reference implementation. \amos matches all outcomes in a 12-task invariant benchmark, compared with 6 of 12 for the strongest local baseline. Across three analytical domains, twelve seeded variants per domain, and three deterministic repetitions, \amos satisfies the complete local capability contract; ablations isolate the contribution of verification, permission filtering, and provenance. Indexed runs cover 1{,}000{,}001 memories and 1{,}000{,}000 provenance edges. A governed retrieval study shows the quality--latency tradeoff among BM25, MiniLM/HNSW, and hybrid retrieval while producing zero restricted-item or superseded-item leaks. Together, these results demonstrate that analytical-state validity, verification, claim support, and replay can be implemented as one executable control loop for LLM data agents.
-\end{abstract}
-
 \maketitle
 
-%%% Required PVLDB block: do not modify for submission. %%%
-\pagestyle{\vldbpagestyle}
-\begingroup\small\noindent\raggedright\textbf{PVLDB Reference Format:}\\
-\vldbauthors. \vldbtitle. PVLDB, \vldbvolume(\vldbissue): \vldbpages, \vldbyear.\\
-\href{https://doi.org/\vldbdoi}{doi:\vldbdoi}
-\endgroup
-\begingroup
-\renewcommand\thefootnote{}\footnote{\noindent
-This work is licensed under the Creative Commons BY-NC-ND 4.0 International License. Visit \url{https://creativecommons.org/licenses/by-nc-nd/4.0/} to view a copy of this license. For any use beyond those covered by this license, obtain permission by emailing \href{mailto:info@vldb.org}{info@vldb.org}. Copyright is held by the owner/author(s). Publication rights licensed to the VLDB Endowment. \\
-\raggedright Proceedings of the VLDB Endowment, Vol. \vldbvolume, No. \vldbissue\ %
-ISSN 2150-8097. \\
-\href{https://doi.org/\vldbdoi}{doi:\vldbdoi} \\
-}\addtocounter{footnote}{-1}\endgroup
+\begin{abstract}
+Continuous large-scale data analysis agents operate across warehouses, streams, catalogs, semantic layers, documents, notebooks, and prior investigations. Their reliability depends not only on model reasoning, but on continuously managing the state that makes each computation valid: schema and metric versions, snapshots or stream offsets, freshness, permissions, feedback, execution records, and provenance. Prompt context, RAG, and text-to-SQL address parts of this problem but do not provide a durable operating abstraction for analytical state.
 
-\ifdefempty{\vldbavailabilityurl}{}{
-\begingroup\small\noindent\raggedright\textbf{PVLDB Artifact Availability:}\\
-The source code, data, and/or other artifacts have been made available at \url{\vldbavailabilityurl}.
-\endgroup
-}
+\amos is a memory operating layer between data analysis agents and the systems they use. It separates bounded model-visible context from persistent, typed, versioned memory; filters permissions before context construction; reconciles temporal and authority conflicts; verifies computations against current schema and semantic state; and attaches claim-level provenance and replay metadata after execution. Raw data remains in existing data platforms while \amos manages governed metadata, references, and analytical history through a stable runtime protocol.
+
+We formalize the memory operating layer, implement a reference system, and evaluate its correctness, auditability, and scaling behavior. \amos matches all outcomes in a 12-task invariant benchmark, compared with 6 of 12 for the strongest local baseline. Across payment failure, subscription churn, and warehouse quality, it satisfies all twelve seeded capability-contract variants per domain in three deterministic repetitions. Component ablations isolate the contribution of verification, permission filtering, and provenance. Indexed studies cover 1{,}000{,}001 memory objects and 1{,}000{,}000 provenance edges, while a governed BM25, MiniLM/HNSW, and hybrid comparison quantifies retrieval quality and latency through 100k distractors with zero restricted-item or superseded-item leaks. The results establish a concrete systems foundation for continuous large-scale data analysis agents whose context, computation, claims, and corrections remain governable over time.
+\end{abstract}
 
 \section{Introduction}
 
-Language-model agents increasingly act as data analysts: they translate questions into SQL, execute notebooks, inspect documents, summarize dashboards, and generate slides. They can also hide state errors behind fluent prose: stale metrics, wrong schemas, incomplete late data, or superseded prior analyses. The key problem is whether an agent can manage the context that makes its computation valid.
+Language-model agents increasingly perform continuous data analysis: they translate questions into SQL, execute notebooks, inspect documents, monitor dashboards, and generate reports. At organizational scale, each task crosses changing data and metadata systems, and fluent output can hide state errors such as stale metrics, wrong schemas, incomplete late data, unauthorized evidence, or superseded analyses. The central systems problem is how an agent maintains the valid analytical state for every computation as workloads, users, and source systems evolve.
 
-Continuous analysis is stateful. A request such as ``why did anomaly rate increase in the last six hours?'' may require an approved metric, stream offsets and watermarks, active schema, ingestion delays, prior incidents, quality checks, and the query/chart supporting each claim. Existing data systems provide pieces of this state \cite{millwheel,dataflow,flink,deltalake,openlineage,provdm}; an analytical agent still needs a runtime layer that selects valid context, handles conflicts, and ties artifacts back to evidence.
+Continuous large-scale analysis is stateful. A request such as ``why did anomaly rate increase in the last six hours?'' may require an approved metric, stream offsets and watermarks, an active schema, ingestion delays, prior incidents, quality checks, and the query or chart supporting each claim. Existing data systems provide pieces of this state \cite{millwheel,dataflow,flink,deltalake,openlineage,provdm}; an analytical agent still needs an operating layer that selects valid context, resolves conflicts, preserves corrections, and ties outputs back to execution evidence across tasks.
 
 Existing LLM techniques are building blocks, not a full memory abstraction. RAG exposes external text \cite{rag}; long-context models remain position-sensitive \cite{lostinthemiddle}; tool-using agents interleave reasoning and actions \cite{react,toolformer}; text-to-SQL benchmarks measure schema-grounded queries \cite{spider,bird,spider2}. None guarantees temporally valid, permission-filtered, conflict-aware context linked to reproducible execution traces.
 
-\amos is a provenance-aware memory operating layer between an analytical agent and systems such as warehouses, stream processors, semantic layers, catalogs, and lineage tools. Those systems provide evidence, definitions, or traces; \amos decides which versioned and permissioned state enters the bounded working set, verifies computations against that state, and persists corrected state across tasks.
+\amos is that memory operating layer. It sits between analysis agents and warehouses, stream processors, semantic layers, catalogs, documents, execution tools, and lineage systems. These systems provide data, definitions, or traces; \amos gives agents one runtime contract for deciding which versioned and permissioned state enters a bounded working set, verifying computation against that state, recording claim support, and carrying reviewed corrections into later tasks.
 
-\paragraph{Scope.} \amos targets controllable state validity and auditability. It makes each important claim inspectable through the data state, code, semantic definition, memory version, and verification record that support it; analysts retain responsibility for causal and high-impact decisions.
+\paragraph{System boundary.} \amos manages analytical state and references rather than copying unrestricted raw data into model memory. It targets controllable validity, governance, and auditability: analysts retain responsibility for causal and high-impact decisions, while every important claim remains inspectable through its data state, computation, definitions, memory versions, and verification record.
 
 \paragraph{Contributions.} The paper contributes:
 \begin{enumerate}
-    \item a problem definition and typed state model for continuous analytical memory;
-    \item a permission-first runtime protocol for retrieval, reconciliation, verification, citation, feedback, and replay;
-    \item claim-level provenance linking outputs to data state, code, definitions, memory versions, and verification status;
-    \item a reference implementation and reproducible evaluation spanning invariant coverage, three analytical domains, component ablations, retrieval engines, and million-object local scale.
+    \item a systems abstraction for a memory operating layer that connects continuous analysis agents to changing data, semantic, governance, and execution state;
+    \item a typed hierarchy and runtime protocol for bounded retrieval, supersession, reconciliation, verification, citation, feedback, and replay;
+    \item claim-level provenance linking outputs to data state, code, definitions, memory versions, permissions, and verification status;
+    \item a reference implementation and reproducible evaluation spanning invariant coverage, three analytical domains, component ablations, retrieval engines, concurrency, and million-object local scale.
 \end{enumerate}
 
 \paragraph{Research questions.} The evaluation is organized around four questions:
 \begin{enumerate}
-    \item[RQ1.] \textbf{Verifier behavior:} does the prototype accept structurally valid governed SQL and reject seeded schema, metric, permission, and safety violations?
-    \item[RQ2.] \textbf{Contract enforcement:} which analytical-state guarantees are enforced by \amos and which are present in adjacent local policies?
-    \item[RQ3.] \textbf{Auditability cost:} what local latency, token, storage, and replay overhead is added by claim-level provenance?
-    \item[RQ4.] \textbf{Scale and robustness:} how do retrieval, concurrency, adversarial probes, claim extraction, and a live-model pilot behave under increasing workload complexity?
+    \item[RQ1.] \textbf{Operating-layer correctness:} does the runtime accept valid analytical computations and reject schema, metric, permission, freshness, and safety violations?
+    \item[RQ2.] \textbf{Persistent contract enforcement:} which guarantees require a memory operating layer rather than prompt-only, retrieval-only, semantic, or lineage policies?
+    \item[RQ3.] \textbf{Auditability cost:} what latency, storage, and replay overhead is added by claim-level provenance and governed state management?
+    \item[RQ4.] \textbf{Large-scale behavior:} how do indexed memory, provenance, retrieval quality, concurrency, and updates behave as state grows from thousands to millions of objects?
 \end{enumerate}
 
 \section{Background and Related Work}
 
-\subsection{Memory and Context Management for LLM Agents}
-LLMs operate under finite context windows. Long-context models help, but they still require context selection, ordering, updating, and validation; models may underuse information placed in the middle of long prompts \cite{lostinthemiddle}. MemGPT treats the prompt as constrained main memory and external stores as archival memory \cite{memgpt}. Generative Agents stores observations and reflections for later planning, while Reflexion persists verbal feedback across trials \cite{generativeagents,reflexion}. Surveys organize agent memory by sources, representations, operations, and evaluation strategies \cite{memorysurvey}. \amos narrows the focus to governed analytical state: schemas, metric definitions, snapshots, stream offsets, code artifacts, feedback, permissions, and provenance.
+\subsection{Memory, Context, and Operating Layers for LLM Agents}
+LLMs operate under finite context windows. Long-context models help, but they still require context selection, ordering, updating, and validation; models may underuse information placed in the middle of long prompts \cite{lostinthemiddle}. MemGPT treats the prompt as constrained main memory and external stores as archival memory \cite{memgpt}. Generative Agents stores observations and reflections for later planning, while Reflexion persists verbal feedback across trials \cite{generativeagents,reflexion}. Surveys organize agent memory by sources, representations, operations, and evaluation strategies \cite{memorysurvey}. \amos extends this line from memory as stored content to memory as an operating layer: a governed interface over schemas, metrics, snapshots, stream offsets, code, feedback, permissions, and provenance that mediates every analytical task.
 
 \subsection{Retrieval, Tool Use, and Text-to-SQL}
 RAG retrieves non-parametric evidence \cite{rag}; ReAct and Toolformer show how agents interleave reasoning with tool calls \cite{react,toolformer}; Spider, BIRD, Spider 2.0, and EntSQL evaluate schema grounding, database interaction, enterprise metadata, dialects, codebase context, and business semantics \cite{spider,bird,spider2,entsql}. These directions motivate \amos but leave a gap: query generation alone is insufficient when correctness depends on versioned memory, feedback retention, temporal validity, permissions, and provenance.
@@ -126,13 +104,12 @@ PROV and OpenLineage define provenance and lineage vocabularies for entities, jo
 \subsection{Positioning Against Existing System Classes}
 Table~\ref{tab:comparison} summarizes the boundary between \amos and adjacent systems. In deployment, \amos should rely on them; its role is the runtime policy for selecting, reconciling, verifying, citing, and updating an analytical agent's working state.
 
-The contribution is an executable contract that composes effective-time and authority-aware context selection with pre-execution analytical verification and post-execution claim support. This contract turns capabilities that are usually integrated ad hoc into one testable runtime abstraction.
+The contribution is a compositional systems abstraction rather than a new retrieval algorithm or provenance vocabulary in isolation. The memory operating layer ties effective-time and authority-aware context selection to pre-execution verification, post-execution claim support, durable feedback, and replay through one executable contract.
 
 \begin{table}[t]
 \centering
 \scriptsize
 \setlength{\tabcolsep}{2.8pt}
-\resizebox{0.95\linewidth}{!}{%
 \begin{tabular}{L{0.20\linewidth}C{0.13\linewidth}C{0.14\linewidth}C{0.14\linewidth}C{0.13\linewidth}C{0.13\linewidth}}
 \toprule
 \textbf{Runtime capability} & \textbf{RAG} & \textbf{Semantic layer} & \textbf{Catalog/ lineage} & \textbf{Long context} & \textbf{\amos} \\
@@ -147,19 +124,18 @@ Durable reviewer feedback & Optional & \none & \none & \none & \yes \\
 Replay with memory/verifier state & \none & \none & Job-level & \none & \yes \\
 \bottomrule
 \end{tabular}
-}
 \caption{Conceptual comparison with adjacent system classes. \none{} denotes no typical standalone support; ``Partly'' denotes support that usually requires additional integration or policy. \amos is intended to compose with these systems rather than replace them.}
 \label{tab:comparison}
 \end{table}
 
-\section{Problem Definition}
+\section{Continuous Analysis as an Operating-Layer Problem}
 
-\subsection{Continuous Analytical Task}
+\subsection{Continuous Large-Scale Analytical Task}
 A simplified text-to-SQL task maps a natural-language request $q$ and schema context $C$ to an executable query $E$:
 \begin{equation}
     q + C \rightarrow E.
 \end{equation}
-For continuous analytics this abstraction is too small. At time $t$, a task depends on streams, snapshots, schemas, semantic definitions, documents, prior analyses, feedback, and permissions:
+For continuous large-scale analytics this abstraction is too small. At time $t$, a task depends on streams, snapshots, schemas, semantic definitions, documents, prior analyses, feedback, and permissions distributed across multiple systems:
 \begin{equation}
     \task_t = (q_t, S_{1:n}, H, C_t, D_t, A_{<t}, F_{<t}, P_t),
 \end{equation}
@@ -184,32 +160,34 @@ The memory objective is to select a bounded working set $W_t \subset \mem_t$ tha
 \end{equation}
 where $B$ is the active-context budget. The objective is not to maximize the amount of context, but to retrieve the smallest useful, current, permissioned, and source-backed context.
 
+The operating-layer requirement is that model-visible context stays bounded as persistent analytical state grows. Let $N_t = |\mem_t|$ be the number of memory objects and $G_t$ the number of provenance edges. An agent should reason over $O(B)$ selected state while indexed storage, retrieval, reconciliation, update, and replay operations manage $N_t$ and $G_t$ outside the model context. This separation allows continuous analysis without making prompt length proportional to organizational history.
+
 The formalism is operational: $P_t$ is applied before context construction; $C_t$ and $M^m_t$ must match the SQL and metric definition in $E_t$; $M^s_t$ identifies the data state behind numeric claims; $F_{<t}$ persists reviewed corrections; and $\prov_t$ and $R_t$ make artifacts inspectable. The evaluation tests these invariants in a controlled setting.
 
 \subsection{Failure Modes}
 \amos targets system-state failures rather than hallucination alone: stale definitions, schema drift, late data, lost feedback, unsupported claims, unauthorized context, and prompt injection through retrieved content. Appendix Table~\ref{tab:failures} lists the representative failures used to shape the benchmark.
 
-\section{AMOS Design}
+\section{The AMOS Memory Operating Layer}
 
 \subsection{Design Goals}
-\amos has five design goals:
+\amos has six design goals:
 \begin{enumerate}
     \item \textbf{Temporal correctness:} context must be valid for the requested time interval and data state.
     \item \textbf{Bounded active context:} the agent should see only the relevant working set, not the entire organizational memory.
     \item \textbf{Permission awareness:} memory retrieval and tool execution must respect user and task permissions.
     \item \textbf{Provenance by default:} important claims should be tied to supporting data, code, definitions, and memory versions.
     \item \textbf{Human-correctable memory:} reviewer feedback should update memory so repeated mistakes decrease over time.
+    \item \textbf{Scale separation:} persistent state and provenance may grow independently while model-visible context remains bounded and backend implementations remain replaceable.
 \end{enumerate}
 
-\subsection{System Boundary}
-\amos composes with warehouses, lakehouses, stream processors, semantic layers, BI tools, catalogs, and lineage systems by managing governed references to their state. Raw data stays in its source environment. The runtime guarantee is structural: configured state-management failures become explicit and inspectable before an artifact is published.
+\subsection{Composition with the Data Stack}
+\amos does not replace warehouses, lakehouses, stream processors, semantic layers, BI tools, catalogs, or lineage systems. It provides the memory and control interface that connects them to analysis agents. Raw data stays in governed source systems; \amos maintains typed state, external references, execution records, and provenance so that changes in one source can invalidate, reconcile, or replay dependent analytical work.
 
 \subsection{Architecture}
-Figure~\ref{fig:architecture} gives the system view. The analytical agent interacts with \amos, which mediates retrieval, tool calls, verification, memory writes, and provenance recording instead of directly injecting all retrieved material into the prompt.
+Figure~\ref{fig:architecture} gives the system view. The analytical agent interacts with \amos through a stable operating-layer contract. \amos mediates retrieval, tool calls, verification, memory writes, provenance recording, and replay instead of directly injecting an unbounded collection of retrieved material into the prompt.
 
-\begin{figure*}[t]
+\begin{figure}[H]
 \centering
-\resizebox{0.94\textwidth}{!}{%
 \begin{tikzpicture}[
   node distance=5mm and 7mm,
   every node/.style={font=\scriptsize, align=center},
@@ -244,49 +222,43 @@ Figure~\ref{fig:architecture} gives the system view. The analytical agent intera
 \draw[flow] (claimcheck) -- (provenance);
 
 \node[draw=blue!50, rounded corners=3pt, fit=(permission)(reconcile)(verify)(claimcheck), inner sep=5pt,
-      label={[font=\scriptsize\bfseries]above:AMOS runtime contract}] {};
+      label={[font=\scriptsize\bfseries]above:AMOS memory operating layer}] {};
 \end{tikzpicture}
-}
-\caption{\amos as a runtime control loop. Permission filtering precedes model-visible context; reconciliation precedes execution; verifier and claim-support gates mediate tools and publication; provenance feeds later retrieval and replay.}
-\Description{A left-to-right system diagram. A user request enters a planner and then four AMOS gates: permission-first retrieval, authority and time reconciliation, pre-execution verification, and post-execution claim review. Governed memory and external data systems feed the gates; execution tools, a provenance store, and a replayable artifact receive outputs.}
+\caption{\amos as a memory operating layer. A bounded model-visible working set sits above persistent governed memory; permission filtering and reconciliation precede execution; verification and claim-support gates mediate tools and publication; provenance feeds later retrieval and replay.}
 \label{fig:architecture}
-\end{figure*}
+\end{figure}
 
-A minimal implementation requires active context, schema/semantic memory, provenance memory, retrieval, citation/replay, and a verifier. Stream state, documents, prior analyses, and feedback improve coverage but can be added incrementally.
+A minimal implementation requires bounded active context, persistent schema and semantic state, provenance memory, retrieval, verification, citation, and replay. Stream state, documents, prior analyses, and reviewer feedback extend the same operating interface without changing the agent-facing protocol.
 
 \subsection{Memory Tiers}
 \amos separates active context from persistent tiers for stream or snapshot state, schema/catalog metadata, semantic definitions, documents, prior analyses, feedback, and provenance; Appendix Table~\ref{tab:tiers} gives the detailed map.
 
-\section{Memory Model and Operations}
+\section{Memory Model and Operating Primitives}
 
 \subsection{Memory Object}
 A memory item is a typed object, not an arbitrary text chunk:
 
-{\scriptsize
 \begin{verbatim}
 MemoryObject {
   id: stable identifier
-  type: active_context | stream_state | schema
-        | semantic_definition | document
-        | prior_analysis | feedback | provenance
+  type: active_context | stream_state | schema | semantic_definition
+        | document | prior_analysis | feedback | provenance
         | permission_policy
-  content: metadata or external-object reference
+  content: structured metadata or an external-object reference
   summary: compact model-readable representation
   source: producing system or actor identifier
-  authority: owner_approved | reviewer_approved
-             | user_note | system_observed
-             | model_hypothesis | untrusted_external
-  effective_start, effective_end: described interval
-  transaction_time: AMOS recording time
+  authority: owner_approved | reviewer_approved | user_note
+             | system_observed | model_hypothesis | untrusted_external
+  effective_start, effective_end: interval described by the item
+  transaction_time: time at which AMOS recorded the item
   permissions: required permission labels
   sensitivity: classification label
   version: source or policy version
   status: active | superseded | rejected | pending_review
   supersedes: identifiers replaced by this object
-  provenance_ref: source object or computation link
+  provenance_ref: link to source object or producing computation
 }
 \end{verbatim}
-}
 
 The split between \code{effective\_time} and \code{transaction\_time} matters: a document may be recorded today but describe last quarter, and a reviewed metric may apply only to future reports.
 
@@ -295,31 +267,28 @@ The proposed contract is defined by five publication invariants. Let $W_t$ be th
 \begin{align}
 I_1 &: \forall i \in W_t,\; permitted(i,P_t), \\
 I_2 &: \forall i \in W_t,\; effective(i,t) \land \neg superseded(i,t), \\
-I_3 &: execute(E_t) \Rightarrow schemaValid(E_t,W_t) \\
-    &\quad \land metricValid(E_t,W_t) \land readOnly(E_t), \notag\\[-1.2ex]
+I_3 &: execute(E_t) \Rightarrow schemaValid(E_t,W_t) \land metricValid(E_t,W_t) \land readOnly(E_t), \\
 I_4 &: publish(Y_t) \Rightarrow \forall c \in importantClaims(Y_t),\; supported(c,\prov_t), \\
 I_5 &: replayable(Y_t) \Rightarrow complete(R_t,W_t,E_t,\prov_t).
 \end{align}
-$I_1$ is enforced before model context construction; $I_2$ during retrieval and reconciliation; $I_3$ before tool execution; and $I_4$--$I_5$ before publication. These implications test structural validity, while causal interpretations and high-impact actions remain review-gated.
+$I_1$ is enforced before model context construction; $I_2$ during retrieval and reconciliation; $I_3$ before tool execution; and $I_4$--$I_5$ before publication. These implications define the operating-layer boundary: sources and causal interpretations retain their own review requirements, while state validity and claim support become executable runtime properties.
 
 The runtime returns one of five outcome classes. \code{reject} blocks execution or publication after an unresolved safety or validity failure. \code{repair} proposes a modified computation that must pass the same checks from the beginning. \code{warning} permits a mechanically valid artifact while exposing incomplete freshness or other bounded uncertainty. \code{needs\_review} keeps causal or operational claims non-final. \code{pass} means the configured structural checks succeeded.
 
-The reference prototype uses snapshot consistency: each task records the exact memory IDs and external snapshot or offset references observed during the run. The deployment design pairs this record with atomic artifact/provenance publication, immutable source versions or leases, and invalidation when policy, schema, or metric state changes.
+The reference prototype uses snapshot consistency: each task records the memory IDs and external snapshot or offset references observed during the run. The deployment design pairs this record with atomic artifact/provenance publication, immutable source versions or leases, and invalidation when policy, schema, or metric state changes.
 
-\subsection{Core Operations}
-\amos exposes system-level operations rather than prompting conventions: retrieve, write, supersede, reconcile, compact, verify, cite, and replay. Appendix Table~\ref{tab:ops} defines them.
+\subsection{Core Operating Primitives}
+\amos exposes system-level primitives rather than prompting conventions: retrieve, write, supersede, reconcile, compact, verify, cite, and replay. These primitives form the stable agent-facing API while storage, retrieval, execution, and provenance backends can evolve independently. Appendix Table~\ref{tab:ops} defines their contracts.
 
 \subsection{Runtime Protocol}
 The runtime protocol starts with policy construction so inaccessible memory never enters model-visible context. \amos retrieves candidates, reconciles conflicts, builds a bounded working set, verifies tool calls, records execution, cites claims, and writes durable feedback only after verification gates run.
 
-{\scriptsize
 \begin{verbatim}
-AMOS-RUN(q, user, policy, budget, prov_level):
+AMOS-RUN(q, user, policy, budget, provenance_level):
   task <- parse(q)
   candidates <- retrieve(task, policy, budget)
   working_set, conflicts <- reconcile(candidates)
-  if unresolved(conflicts):
-      return needs_review(conflicts)
+  if unresolved(conflicts): return needs_review(conflicts)
 
   plan <- agent.plan(task, working_set)
   for step in plan.tool_steps:
@@ -330,15 +299,14 @@ AMOS-RUN(q, user, policy, budget, prov_level):
   artifact <- agent.compose(task, working_set, results)
   claims <- extract_claims(artifact)
   for claim in claims:
-      cite(claim, results, working_set, prov_level)
+      cite(claim, results, working_set, provenance_level)
 
   verification <- verify(artifact)
-  replay_package <- package(task, plan, working_set,
-                            results, verification)
+  replay_package <- package(task, plan, working_set, results,
+                            verification)
   write(artifact, claims, provenance, replay_package)
   return artifact, verification, replay_package
 \end{verbatim}
-}
 
 The ordering is the system contract: permission filtering precedes context injection, reconciliation precedes planning, verification precedes execution, provenance precedes publication, and memory writes preserve authority and review status. Deployments may replace individual steps with learned retrievers or richer verifiers.
 
@@ -349,10 +317,9 @@ Retrieval combines semantic relevance with system constraints. The correctness-f
 \end{equation}
 where $m$ is field-aware match quality, $a$ authority, $f$ freshness, $v$ verification/review status, $s$ active non-superseded status, and $c$ visible sensitivity risk. Access violations are filtered before scoring.
 
-{\scriptsize
 \begin{verbatim}
 GOVERNED-RETRIEVE(q, user, time_range, budget):
-  candidates <- lexical_candidates(q, cand_budget)
+  candidates <- lexical_candidates(q, candidate_budget)
   visible <- []
   for item in candidates:
       if not permitted(user, item.permissions):
@@ -364,10 +331,10 @@ GOVERNED-RETRIEVE(q, user, time_range, budget):
   for item in visible:
       score <- field_match(q, item.id, item.type,
                            item.summary, item.content)
-      score += authority_score(item)
-      score += freshness_score(item, time_range)
-      score += verification_score(item)
-      score += supersession_score(item)
+      score += authority_score(item.source, item.authority)
+      score += freshness_score(item.effective_time, time_range)
+      score += verification_score(item.status, item.review_state)
+      score += supersession_score(item.status, item.supersedes)
       score -= sensitivity_penalty(item, user)
       scored.append((score, item))
 
@@ -375,27 +342,26 @@ GOVERNED-RETRIEVE(q, user, time_range, budget):
   warnings <- ambiguity_warnings(ranked, q, time_range)
   return top_k(ranked, budget), warnings
 \end{verbatim}
-}
 
 Ambiguity handling is part of the success criterion: when similarly named active items plausibly match, \amos surfaces a warning and keeps the approved task-relevant item near the top rather than silently accepting the first lexical match.
 
 Conflict resolution follows a partial order, not blind recency. A default authority order is:
 \begin{equation}
-    owner > reviewer > user > model.
+    owner\_approved > reviewer\_approved > user\_note > model\_hypothesis.
 \end{equation}
 Effective time constrains this order: a newer model hypothesis cannot override an older owner-approved definition that remains effective. Conflicting owner-approved definitions for the same interval are surfaced, not silently resolved.
 
 \subsection{Stream-Aware but Not Stream-Only}
 \amos is stream-aware, not stream-only. In batch settings, $M^s_t$ stores snapshot identifiers, table versions, query timestamps, partition ranges, and data-quality status rather than offsets and watermarks; the other tiers remain unchanged.
 
-\section{Reference Prototype}
+\section{Reference Implementation}
 
-We implemented a local reference prototype with typed memory, pre-execution verification, replayable artifacts, and a deterministic SQL path. This design isolates the behavior of memory management, verification, and provenance from variation in natural-language SQL generation.
+We implemented the memory operating layer as a deterministic reference system: SQL is template-selected, retrieved memory is typed, verification runs before execution, and artifacts are replayable from saved metadata. This isolates operating-layer behavior from variation in natural-language SQL generation.
 
-Retrieval uses SQLite FTS5/BM25 candidate generation followed by permission, temporal, authority, reconciliation, and reranking checks. Separate MiniLM/HNSW and reciprocal-rank-fusion paths evaluate how candidate generation affects the same governed control loop.
+The implementation uses SQLite FTS5/BM25 candidate generation followed by permission, temporal, authority, reconciliation, and reranking checks. Separate MiniLM/HNSW and reciprocal-rank-fusion paths evaluate how candidate generation affects the same governed protocol. The agent-facing operations remain unchanged across these backends.
 
 \subsection{System Components}
-The artifact uses SQLite for one-command reproduction. Its schema separates memory objects, artifacts, claims, provenance edges, replay packages, and audit logs, with JSON payloads for versioned metadata. FTS5 triggers synchronize the lexical index with memory writes; source/target indexes support provenance lookup. Candidate-generation backends remain interchangeable beneath the \amos control loop; the supplementary artifact maps each local component to its deployment role.
+The artifact uses SQLite for one-command reproduction. The schema separates memory objects, artifacts, claims, provenance edges, replay packages, and audit logs, with JSON payloads for versioned metadata. FTS5 triggers synchronize the lexical index with memory writes; source/target indexes support provenance lookup. Candidate-generation and storage backends change scale characteristics without changing the memory operating contract. Appendix Table~\ref{tab:prototype} summarizes the components.
 
 \subsection{Synthetic Payment Scenario}
 The prototype seeds 14{,}400 payment events over twelve hours. Failures rise in the final six-hour event-time window and concentrate in Processor B / Visa transactions. The dataset includes excluded test accounts, a deployment before the spike, late arrivals represented by watermark lag, and a schema migration from \code{failure\_reason} to \code{error\_code}. Seeded memory includes the approved \code{payment\_failure\_rate:v3} metric, current \code{payment\_events:v2} schema, stream state, a restricted prior incident, deployment evidence, reviewer feedback against over-attribution, and an analyst policy.
@@ -403,18 +369,17 @@ The prototype seeds 14{,}400 payment events over twelve hours. Failures rise in 
 For the main request, the controller retrieves the approved metric, current schema, stream state, deployment note, reviewer feedback, and policy, while filtering the restricted incident for a user without \code{sre}. The report states that failure rate rose from 2.2\% to 7.4\%; Processor B / Visa reached 15.8\%. Deployment evidence remains review-gated rather than causal proof.
 
 \subsection{Replay Package}
-Each run writes a replay package with the request, plan, memory IDs, schema and metric versions, stream state, SQL, chart IDs, result hashes, and verifier status. Replay re-executes the saved SQL against DuckDB, regenerates the chart, and compares hashes, demonstrating that an analytical artifact can carry the state required for audit and regeneration.
+Each run writes a replay package with the request, plan, memory IDs, schema and metric versions, stream state, SQL, chart IDs, result hashes, and verifier status. Replay re-executes the saved SQL against DuckDB, regenerates the chart, and compares hashes, demonstrating that a continuous analytical artifact can carry the state required for audit and regeneration.
 
 \section{Provenance, Verification, and Security}
 
 \subsection{Claim-Level Provenance}
 Artifact-level lineage is too coarse: one report may contain a correct chart, an outdated metric, and an unsupported causal explanation. \amos records provenance at the claim level:
 
-{\scriptsize
 \begin{verbatim}
 ClaimProvenance {
-  claim_id: sentence, annotation, bullet, or table cell
-  artifact_id: report, notebook, chart, dashboard, deck
+  claim_id: sentence, chart annotation, slide bullet, or table cell
+  artifact_id: report, notebook, chart, dashboard, or deck
   support: [query_id, notebook_cell_id, chart_id,
             document_ref, memory_object_id]
   data_state: [snapshot_id | stream_offset_range,
@@ -427,15 +392,13 @@ ClaimProvenance {
                        unresolved_conflicts]
 }
 \end{verbatim}
-}
 
 This structure lets reviewers identify claims using superseded metrics, restricted sources, late-data-sensitive outputs, or expired replay state.
 
 Figure~\ref{fig:claim-provenance} shows one concrete support graph. Edges are typed rather than generic citations: the numeric claim is computed by a query and chart, governed by metric and schema versions, scoped to a recorded data state, and checked by a verifier whose result enters the replay package.
 
-\begin{figure*}[t]
+\begin{figure}[H]
 \centering
-\resizebox{0.90\textwidth}{!}{%
 \begin{tikzpicture}[
   every node/.style={font=\scriptsize, align=center},
   item/.style={draw, rounded corners=2pt, fill=blue!5, inner sep=4pt},
@@ -459,16 +422,14 @@ Figure~\ref{fig:claim-provenance} shows one concrete support graph. Edges are ty
 \draw[edge, dashed] (query) -- (replay);
 \draw[edge, dashed] (data) -- (replay);
 \end{tikzpicture}
-}
 \caption{Worked claim-level provenance graph. Support edges distinguish computation, semantic governance, data state, verification, and replay rather than attaching one artifact-level source list.}
-\Description{A provenance graph centered on the claim that failure rate rose from 2.2 percent to 7.4 percent. Query and chart evidence compute and visualize the claim; metric, schema, snapshot, and watermark state govern and scope it; verification checks it; and a replay package records versions and environment.}
 \label{fig:claim-provenance}
-\end{figure*}
+\end{figure}
 
 The prototype uses claim-type-specific support plans. Numeric rate claims cite summary/time-series queries and charts; concentration claims cite concentration queries; deployment and dashboard claims cite numeric, document, and approved-feedback evidence and remain review-gated. Coverage is complete only when support categories match the claim type.
 
 \subsection{Provenance Levels}
-Full replay is expensive and unnecessary for low-risk exploration. \amos therefore supports configurable provenance levels: high-risk reporting should use claim-level provenance or full replay; exploration may use artifact- or chart/query-level records. The supplementary artifact lists the levels.
+Full replay is expensive and unnecessary for low-risk exploration. \amos therefore supports configurable provenance levels: high-risk reporting should use claim-level provenance or full replay; exploration may use artifact- or chart/query-level records. Appendix Table~\ref{tab:provlevels} lists the levels.
 
 \subsection{Concrete Verifier}
 Verification is structural and semantic, not a proof of truth. The prototype verifier rejects unsafe or stale computations before execution and downgrades unsupported interpretations after execution. It runs six checks.
@@ -497,13 +458,13 @@ The core controller emits explicit claim records from structured report template
     \item \textbf{Sensitive provenance handling:} provenance views are redacted according to user role and task need.
 \end{enumerate}
 
-The runtime composes these controls with existing access control, secret isolation, execution sandboxes, audit logs, and organization-specific approval policies.
+The operating layer composes these controls with existing access control, secret isolation, execution sandboxes, audit logs, and organization-specific approval policies.
 
 The seeded security suite covers indirect prompt injection, malicious prior analyses, malicious reviewer feedback, safe feedback rendering, provenance-link leakage, and cross-user filtering. \amos passes all six after adding authority-aware feedback ranking and separating low-authority evidence from applied reviewer guidance.
 
-\section{Evaluation Methodology and Results}
+\section{Evaluation of Operating-Layer Correctness and Scale}
 
-The evaluation tests whether the \amos control loop enforces its invariants and catches state-management failures missed by adjacent local policies.
+The evaluation tests whether the \amos memory operating layer enforces its contract across changing analytical state, preserves auditability, and maintains bounded agent context as persistent memory and provenance grow.
 
 \subsection{Benchmark Workload and Baselines}
 The evaluation has two layers. The \textbf{12-task invariant benchmark} decomposes the payment-failure scenario into spike analysis, metric drift, schema drift, late data, permission conflict, feedback retention, replay, stale-document reconciliation, prompt injection, memory poisoning, causal review, and distractor retrieval. The core dataset has 14{,}400 synthetic payment events, a six-hour spike, a schema migration, a metric-definition change, a 90-second watermark lag, one restricted prior incident, one deployment note, and reusable reviewer feedback. Retrieval probes add 5{,}000 distractor memory objects plus paraphrased, ambiguous, stale-similar, near-duplicate, and permission-dependent cases.
@@ -521,7 +482,6 @@ Each task is an input request plus a seeded memory/data perturbation. The predef
 \centering
 \scriptsize
 \setlength{\tabcolsep}{3pt}
-\resizebox{0.95\linewidth}{!}{%
 \begin{tabular}{L{0.20\linewidth}L{0.24\linewidth}L{0.28\linewidth}L{0.18\linewidth}}
 \toprule
 \textbf{Task family} & \textbf{Perturbation} & \textbf{Expected evidence or decision} & \textbf{Gate} \\
@@ -531,12 +491,11 @@ Late data & Watermark trails the interval by 90 seconds. & Records offsets and w
 Permission conflict & Relevant prior incident is restricted. & Excludes restricted memory from context and citations. & Retrieval gate \\
 Feedback retention & Reviewer correction is written once. & Later task retrieves correction and avoids over-attribution. & Memory write/retrieve \\
 Replay/provenance & Saved artifact is regenerated. & SQL hashes, chart metadata, memory IDs, and verification state match. & Replay engine \\
-Adversarial memory & Injection text or low-authority metric is retrieved. & Treats text as data; approved memory prevails. & Reconciliation/\newline write gate \\
+Adversarial memory & Injection text or low-authority metric is retrieved. & Treats text as data; approved memory prevails. & Reconciliation/write gate \\
 Causal review & Deployment note precedes spike. & Marks causal and dashboard-update claims \code{needs\_review}. & Claim verifier \\
 Distractor retrieval & 5{,}000 unrelated memories are added. & Approved metric remains rank 1. & Retriever \\
 \bottomrule
 \end{tabular}
-}
 \caption{Task protocol. The benchmark scores the expected system decision, including warnings, rejections, and \code{needs\_review} outcomes, rather than rewarding only complete answers.}
 \label{tab:task-protocol}
 \end{table}
@@ -546,7 +505,7 @@ Baselines receive the seeded metadata their capability would normally consume. T
 Reported \amos invariant-benchmark runtime is averaged over three deterministic local runs. The extended harness adds local baseline policies, noisy retrieval variants, a 50-case invariant regression suite, a frozen verifier engineering corpus, a 1{,}000-example claim-extraction corpus, seeded security probes, 5{,}000-distractor retrieval, and concurrent retrieval measurements. Capability-contract executions use the deterministic offline live-agent provider and record per-run contracts, metric axes, failures, and provenance-overhead pairs.
 
 \subsection{Metrics}
-The primary outcomes are state correctness, auditability, and safety under changing context. The supplementary artifact defines the complete metric set.
+The primary outcomes are state correctness, bounded-context governance, auditability, replay, retrieval quality, update visibility, and indexed scaling behavior. Appendix Table~\ref{tab:metrics} defines the metric set used by the harness.
 
 \subsection{Benchmark Results}
 Table~\ref{tab:prototype-results} reports aggregate criterion matches. \amos matches all 12 outcomes, including non-final warning, rejection, downgrade, and \code{needs\_review} decisions. The strongest baseline, catalog+lineage+dbt, matches 6 of 12: it handles schema, metric, late-data, permission, memory-poisoning, and retrieval-stress checks, but fails integrated spike analysis, feedback retention, replay, stale-document reconciliation, prompt-injection isolation, and causal-review obligations. The offline structured-LLM baseline passes only schema syntax.
@@ -574,10 +533,10 @@ Structured tool-using LLM & 1 & 12 & 0.083 & \na \\
 \amos returns a warning for the integrated report because the watermark lags the requested window and causal/dashboard claims require review. The artifact remains replayable and cited, while tentative causality is not presented as final.
 
 \subsection{Task-Level Results}
-The supplementary artifact gives task-level results for selected baselines. The \amos status is the observed system decision, not just a binary success label.
+Appendix Table~\ref{tab:scenario-checks} gives task-level results for selected baselines. The \amos status is the observed system decision, not just a binary success label.
 
 \subsection{Multi-Domain Capability-Contract Evaluation}
-Table~\ref{tab:product-eval} summarizes full-contract outcomes. Across payment failure, subscription churn, and warehouse quality, \amos passes all twelve seeded variants in all three deterministic repeats per domain. The all-or-nothing result is reported with metric-axis scores so that analytical capability can be distinguished from provenance and replay coverage.
+Table~\ref{tab:product-eval} summarizes full-contract outcomes. Across payment failure, subscription churn, and warehouse quality, \amos passes all twelve seeded variants in all three deterministic repeats per domain. The all-or-nothing result is reported with metric-axis scores so analytical capability can be distinguished from operating-layer provenance and replay coverage.
 
 \begin{table}[t]
 \centering
@@ -600,20 +559,19 @@ Simple RAG / semantic / catalog / long context / agent-only & 0/12 & 0/12 & 0/12
 \label{tab:product-eval}
 \end{table}
 
-The metric-axis breakdown in the supplementary artifact clarifies the comparator story. In the payment domain, both strong baselines and the OSS semantic/catalog adapters score 1.0 on task, SQL, metric, schema, permission, and review axes, yet 0.0 on provenance and replay. The OSS FTS5 RAG adapter reaches 0.75 on the analytical axes with permission safety 1.0. Catalog and semantic legacy baselines can ground SQL and metrics without satisfying the full memory contract. Ablations confirm complementary failure modes: disabling the permission gate collapses permission safety while preserving provenance and replay; disabling provenance recording preserves analytical axes and replay but fails claim support; disabling the verifier damages SQL/metric/schema compliance and reduces replay success.
+The metric-axis breakdown clarifies the comparator story (Appendix Table~\ref{tab:metric-axes}). In the payment domain, both strong baselines and the OSS semantic/catalog adapters score 1.0 on task, SQL, metric, schema, permission, and review axes, yet 0.0 on provenance and replay. The OSS FTS5 RAG adapter reaches 0.75 on the analytical axes with permission safety 1.0. Catalog and semantic legacy baselines can ground SQL and metrics without satisfying the full memory contract. Ablations confirm complementary failure modes: disabling the permission gate collapses permission safety while preserving provenance and replay; disabling provenance recording preserves analytical axes and replay but fails claim support; disabling the verifier damages SQL/metric/schema compliance and reduces replay success.
 
 Matched provenance-overhead executions hold provider, prompts, SQL/tool path, verifier, and replay constant while disabling claim recording. After repeats are collapsed by seeded variant, the payment-domain mean latency delta is about 0.047\,s and the measured raw-evidence delta is about 198 bytes.
 
 Scenario-pack manifests cover three domains with capability-evaluation and live-agent adapters; 120 generated cross-domain task variants pass manifest-contract checks. The scored tables use the twelve executed variants per domain.
 
-\subsection{Ablations, Scale, and Failure Analysis}
-The supplementary artifact reports ablations on the 12-task invariant benchmark. Removing the verifier drops five tasks; removing stream/snapshot memory or semantic memory drops three each.
+\subsection{Ablations and Large-Scale Memory Behavior}
+Appendix Table~\ref{tab:ablations} reports ablations on the 12-task invariant benchmark. Removing the verifier drops five tasks; removing stream/snapshot memory or semantic memory drops three each.
 
 We replaced full-store scans with FTS5/BM25 candidate generation and reran one fixed local protocol at 10{,}001, 100{,}001, and 1{,}000{,}001 total memories, paired with 10{,}000, 100{,}000, and 1{,}000{,}000 provenance edges. The approved metric remains rank 1 in 30/30, 30/30, and 20/20 serial retrievals. Serial p50 latency rises from 0.045\,s to 0.145\,s and 4.997\,s; p95 rises from 0.047\,s to 0.152\,s and 8.488\,s. At eight readers, p95 is 0.411\,s, 0.717\,s, and 4.548\,s. All runs keep the FTS row count synchronized, observe permission revocation and metric supersession, and complete their mixed read/write workload without recorded errors. The million-scale database occupies about 1.50\,GB after all probes. Figure~\ref{fig:scale-latency} shows the latency curve.
 
 \begin{figure}[H]
 \centering
-\resizebox{0.95\linewidth}{!}{%
 \begin{tikzpicture}[x=1.25cm,y=1.05cm,font=\scriptsize]
   \draw[->] (0,0) -- (5.2,0) node[right] {memory objects};
   \draw[->] (0,0) -- (0,3.35) node[above] {latency (s, log)};
@@ -635,16 +593,14 @@ We replaced full-store scans with FTS5/BM25 candidate generation and reran one f
   \draw[orange!85!black,thick,dashed] (2.05,3.18) -- (2.45,3.18) node[right,black] {serial p95};
   \draw[green!45!black,thick,dotted] (3.50,3.18) -- (3.90,3.18) node[right,black] {8-reader p95};
 \end{tikzpicture}
-}
-\caption{Single-machine indexed retrieval latency. Rank-1 correctness holds at every scale; the curve quantifies the SQLite/FTS5 tail-latency increase at one million objects.}
-\Description{A logarithmic line chart of retrieval latency at 10 thousand, 100 thousand, and one million memory objects. Serial median and tail latency rise sharply at one million objects; eight-reader tail latency also increases.}
+\caption{Single-machine indexed memory retrieval. The model-visible working set remains bounded while persistent state grows from 10k to one million objects; rank-1 correctness holds at every scale and the curve quantifies backend tail latency.}
 \label{fig:scale-latency}
 \end{figure}
 
-Provenance insertion throughput is about 109k edges/s at 10k edges, 73k at 100k, and 44k at one million. Indexed target-query p95 is 0.0009\,s, 0.0027\,s, and 0.273\,s, respectively. These measurements quantify the scaling behavior of the reference store and identify candidate-generation and tail latency as the next optimization targets.
+Provenance insertion throughput is about 109k edges/s at 10k edges, 73k at 100k, and 44k at one million. Indexed target-query p95 is 0.0009\,s, 0.0027\,s, and 0.273\,s, respectively. Together with memory retrieval, these measurements demonstrate the operating-layer separation: analytical history scales outside the prompt, while the agent consumes a fixed-budget working set. Candidate generation and million-object tail latency become backend optimization targets rather than changes to the agent protocol.
 
 \subsection{Governed Lexical, Vector, and Hybrid Retrieval}
-We separately compare three candidate-generation paths while holding the post-retrieval governance contract fixed: SQLite FTS5/BM25 plus governed reranking; cosine HNSW over pinned MiniLM-L6-v2 embeddings (revision prefix \code{1110a243fdf4}, $M=16$, \code{ef\_construction=200}, search \code{ef=128}); and reciprocal-rank fusion ($k=60$). The bundle records the full model identifier and revision hash. The controlled workload contains twelve target metrics, 24 lexical or semantic-paraphrase queries, restricted and superseded near-duplicates, and templated distractors. Table~\ref{tab:retrieval-engines} reports the frozen results at 1k, 10k, and 100k distractors.
+We separately compare three candidate-generation paths while holding the post-retrieval operating contract fixed: SQLite FTS5/BM25 plus governed reranking; cosine HNSW over pinned MiniLM-L6-v2 embeddings (revision prefix \code{1110a243fdf4}, $M=16$, \code{ef\_construction=200}, search \code{ef=128}); and reciprocal-rank fusion ($k=60$). The bundle records the full model identifier and revision hash. The controlled workload contains twelve target metrics, 24 lexical or semantic-paraphrase queries, restricted and superseded near-duplicates, and templated distractors. Table~\ref{tab:retrieval-engines} reports the frozen results at 1k, 10k, and 100k distractors.
 
 \begin{table}[H]
 \centering
@@ -663,41 +619,41 @@ We separately compare three candidate-generation paths while holding the post-re
 \label{tab:retrieval-engines}
 \end{table}
 
-MiniLM/HNSW is strongest at 1k but loses relevance as duplicated semantic neighborhoods crowd the fixed index; hybrid retrieval recovers recall while inheriting the lexical tail. Permission-revocation and metric-supersession probes pass at every archived scale. At 100k, SQLite/FTS5 seeding and indexing takes approximately 6.8\,s and 70\,MB, whereas embedding plus HNSW construction takes approximately 667\,s and 169\,MB. The result motivates adaptive candidate generation: vector search for latency, lexical evidence for recall, and governance checks after fusion.
+MiniLM/HNSW is strongest at 1k but loses relevance as duplicated semantic neighborhoods crowd the fixed index; hybrid retrieval recovers recall while inheriting the lexical tail. Permission-revocation and metric-supersession probes pass at every archived scale. At 100k, SQLite/FTS5 seeding and indexing takes approximately 6.8\,s and 70\,MB, whereas embedding plus HNSW construction takes approximately 667\,s and 169\,MB. The result motivates adaptive candidate generation beneath the same operating layer: vector search for latency, lexical evidence for recall, and governance checks after fusion.
 
-\subsection{Extended Local Experiments}\label{sec:extended-experiments}
-The extended harness covers verifier regressions, retrieval ambiguity, invariant variants, scaled claim extraction, seeded security attacks, OSS-shaped adapter probes, and concurrency. The supplementary artifact summarizes all probe-level results.
+\subsection{Extended Operating-Layer Experiments}\label{sec:extended-experiments}
+The extended harness covers verifier regressions, retrieval ambiguity, invariant variants, scaled claim extraction, seeded security attacks, OSS-shaped adapter probes, and concurrency. Appendix Table~\ref{tab:extended-results} summarizes the results.
 
 Noisy retrieval and security probes exposed failures in the earlier keyword-only retriever and report renderer. The revised retriever adds field-aware matching, authority-aware feedback ranking, supersession-aware scoring, and ambiguity warnings; the report generator separates approved feedback from low-authority evidence. Canonical, paraphrased, stale-similar, and permission-dependent probes rank the approved metric first; the ambiguous metric-name probe warns and keeps it in the top two.
 
 Claim extraction is evaluated on a 1{,}000-example seed-controlled corpus spanning report, notebook, slide, ambiguous, subscription, and warehouse artifacts. A regex/keyword extractor reaches mean type precision 0.958, recall 1.0, and review-obligation recall 1.0.
 
-The artifact also includes versioned intake contracts for independent holdout tasks and real claim annotations. Validators hash sealed references, enforce author/reviewer/annotator/adjudicator separation, prevent source-group leakage across splits, preserve pre-adjudication labels, verify exact annotation spans, and align task IDs before paired analysis. This creates a reproducible path from the present controlled study to independent external evaluation.
+The artifact also includes versioned intake contracts for independent holdout tasks and real claim annotations. Validators hash sealed references, enforce author/reviewer/annotator/adjudicator separation, prevent source-group leakage across splits, preserve pre-adjudication labels, verify exact annotation spans, and align task IDs before paired analysis. This creates a reproducible path from controlled operating-layer tests to independent external evaluation.
 
 After replacing flat column-name checks with scoped SQL qualification, a frozen 16-case regression corpus accepts all six labeled-valid queries and rejects all ten labeled-invalid queries. Cases cover aliases, CTE outputs, conditional aggregates, stale and unknown columns, blocked columns, missing metric filters, wrong time fields, adversarial text, and writes.
 
 The archived live feasibility pilot uses the authenticated OpenAI Codex CLI with model \code{gpt-5.6-sol}. A strict lexical grader marks 3 of 8 policy responses as passing, while all three corrected-verifier end-to-end tasks complete with the expected \code{warning} status for watermark lag and review-gated causal claims. One SQL-proposal call times out at 180 seconds; its raw trace is preserved and the isolated retry completes, yielding 3/3 end-to-end completions and zero unresolved provider failures.
 
 \subsection{Evaluation Scope and External Protocol}
-The reported results are controlled prototype evidence: deterministic task variants measure contract enforcement, while the live pilot checks end-to-end feasibility. We therefore report exact task counts and fixed-workload measurements rather than population estimates. A frozen external protocol extends this foundation with 150 independently authored tasks across three domains, multiple model families and prompt frames, double-annotated real artifacts, red-team testing, a reviewer audit study, and a production-faithful comparison system. Separation of task authors, annotators, adjudicators, and system developers is enforced by executable intake validators.
+The reported results are controlled reference-system evidence: deterministic task variants measure contract enforcement, fixed system studies measure indexed state growth, and the live pilot checks end-to-end feasibility. We therefore report exact task counts and fixed-workload measurements rather than population estimates. A frozen external protocol extends this foundation with 150 independently authored tasks across three domains, multiple model families and prompt frames, double-annotated real artifacts, red-team testing, a reviewer audit study, and a production-faithful comparison system. Separation of task authors, annotators, adjudicators, and system developers is enforced by executable intake validators.
 
-\section{Discussion and Research Agenda}
+\section{Discussion and Systems Roadmap}
 
-\subsection{System Position}
+\subsection{Why an Operating Layer?}
 RAG retrieves evidence; catalogs describe assets and governance metadata; semantic layers define metrics; lineage systems track datasets, jobs, and runs. \amos does not replace these systems. It treats them as memory sources and execution references, while adding runtime control of the agent's evolving analytical working state.
 
-The distinction is operational. RAG can retrieve a metric document without deciding whether its version is effective for the requested interval. A catalog can expose a column without ensuring that a report used the valid schema version. A semantic layer can define \code{payment\_failure\_rate} without attaching it to every textual claim. A lineage tool can record a table read without preventing unsupported causal prose. \amos supplies the control loop: retrieve bounded context, check temporal validity and permissions, reconcile conflicts, execute tools, verify outputs, attach claim-level provenance, and write feedback back to memory.
+The distinction is operational. RAG can retrieve a metric document without deciding whether its version is effective for the requested interval. A catalog can expose a column without ensuring that a report used the valid schema version. A semantic layer can define \code{payment\_failure\_rate} without attaching it to every textual claim. A lineage tool can record a table read without carrying a reviewer correction into the next task. \amos supplies the shared layer above them: retrieve bounded context, check temporal validity and permissions, reconcile conflicts, execute tools, verify outputs, attach claim-level provenance, replay prior work, and persist corrections.
 
-\subsection{Deployment Model}
-\amos is designed as a risk-adaptive layer. Exploratory analysis can use artifact-level records, while executive or regulated reporting can require claim-level support and full replay. In the matched payment workload, claim recording adds about 0.047\,s mean latency and 198 bytes to measured raw evidence. Storage and retrieval policies can therefore be selected by claim risk, retention needs, and source-system capabilities.
+\subsection{Large-Scale Deployment Model}
+The operating layer is risk-adaptive. Exploratory analysis can use artifact-level records, while executive or regulated reporting can require claim-level support and full replay. In the matched payment workload, claim recording adds about 0.047\,s mean latency and 198 bytes to measured raw evidence. Persistent state is indexed outside the model, and the active-context budget remains fixed; compaction, retention, invalidation, and storage backends can therefore be tuned without changing the agent-facing API.
 
-The integration path is direct: catalogs and semantic layers populate authoritative memory; warehouse snapshots and stream processors provide data-state references; execution engines provide code and result hashes; and lineage systems receive the resulting claim graph. The external protocol evaluates this composition on real artifacts and a production-faithful comparison system while the systems track advances candidate generation, compaction, policy churn, and concurrent execution.
+The integration path is direct: catalogs and semantic layers populate authoritative memory; warehouse snapshots and stream processors provide data-state references; execution engines provide code and result hashes; and lineage systems receive the resulting claim graph. The systems roadmap advances this composition through distributed metadata storage, adaptive hybrid retrieval, policy churn, concurrent execution, and connectors for dbt, OpenLineage, DataHub/OpenMetadata, warehouse snapshot APIs, and orchestration logs.
 
 \section{Conclusion}
 
-Continuous analytical agents need more than stronger models, larger prompts, or better SQL generation. They need a memory operating layer that manages schemas, semantic definitions, stream or snapshot state, prior analyses, review feedback, permissions, and provenance as first-class resources. \amos proposes that abstraction and demonstrates it in a local prototype with bounded context, persistent memory tiers, claim-level provenance, verification, and replay.
+Continuous large-scale data analysis agents need more than stronger models, larger prompts, or better SQL generation. They need a memory operating layer that manages schemas, semantic definitions, stream or snapshot state, prior analyses, review feedback, permissions, execution history, and provenance as first-class resources. \amos defines that abstraction and implements it as a bounded-context protocol over persistent, typed analytical state.
 
-The central result is that continuous data analysis is memory-bound as well as model-bound. Agents must know which context is valid, which definitions are authoritative, which data state was used, which claims are supported, and which corrections persist. \amos turns these requirements into executable invariants. It satisfies the full contract across the invariant benchmark and three analytical domains, preserves permission and supersession controls across retrieval engines, and records replayable claim support at million-object local scale. This establishes a concrete systems foundation for independently evaluating governed analytical agents on real workloads.
+The central result is that continuous analysis is memory-bound as well as model-bound. Agents must know which context is valid, which definitions are authoritative, which data state was used, which claims are supported, and which corrections persist. \amos turns these requirements into operating-layer invariants. It satisfies the full contract across the invariant benchmark and three analytical domains, preserves permission and supersession controls across retrieval engines, and records replayable claim support while indexed state reaches one million memory objects and one million provenance edges. This establishes a concrete systems foundation for agents that continuously analyze large and changing data environments without allowing prompt context to become the system of record.
 
 \appendix
 \section{Detailed Tables}
@@ -707,8 +663,7 @@ The central result is that continuous data analysis is memory-bound as well as m
 
 \begin{table}[p]
 \centering
-\scriptsize
-\resizebox{0.95\linewidth}{!}{%
+\small
 \begin{tabular}{L{0.22\linewidth}L{0.35\linewidth}L{0.33\linewidth}}
 \toprule
 \textbf{Failure mode} & \textbf{Risk} & \textbf{\amos control} \\
@@ -723,22 +678,20 @@ Unauthorized retrieval & Agent uses restricted data or documents. & Permission f
 Prompt injection & Retrieved text issues malicious instructions. & Instruction/data separation, sandboxed tools, and write gates. \\
 \bottomrule
 \end{tabular}
-}
 \caption{Representative analytical-agent failure modes and the \amos controls that make them inspectable.}
 \label{tab:failures}
 \end{table}
 
 \begin{table}[p]
 \centering
-\scriptsize
-\resizebox{0.95\linewidth}{!}{%
+\small
 \begin{tabular}{L{0.19\linewidth}L{0.35\linewidth}L{0.35\linewidth}}
 \toprule
 \textbf{Tier} & \textbf{Stores} & \textbf{Used for} \\
 \midrule
 Active context & Current task, selected definitions, schema, and recent tool results. & Model-visible working set. \\
-Stream/\newline snapshot state & Offsets, watermarks, event windows, snapshot IDs, late-data policy. & Temporal validity and replay. \\
-Schema/\newline catalog & Tables, columns, joins, owners, sensitivity labels, schema versions. & Query grounding and permissions. \\
+Stream/snapshot state & Offsets, watermarks, event windows, snapshot IDs, late-data policy. & Temporal validity and replay. \\
+Schema/catalog & Tables, columns, joins, owners, sensitivity labels, schema versions. & Query grounding and permissions. \\
 Semantic definitions & Metrics, rules, units, dimensions, effective dates, owners. & Consistent meaning across analyses. \\
 Documents & Runbooks, incident reports, requirements, design notes, summaries. & Source-backed context treated as evidence. \\
 Prior analyses & Accepted SQL, notebooks, charts, explanations, dashboard notes. & Reuse work and preserve analytical history. \\
@@ -746,15 +699,13 @@ Feedback & Corrections, rejected assumptions, approvals, escalation notes. & Dur
 Provenance & Claim-query, query-data, artifact-memory, and version links. & Auditability, impact analysis, and replay. \\
 \bottomrule
 \end{tabular}
-}
 \caption{Typed memory tiers managed by \amos.}
 \label{tab:tiers}
 \end{table}
 
 \begin{table}[p]
 \centering
-\scriptsize
-\resizebox{0.95\linewidth}{!}{%
+\small
 \begin{tabular}{L{0.24\linewidth}L{0.66\linewidth}}
 \toprule
 \textbf{Operation} & \textbf{Contract} \\
@@ -769,14 +720,28 @@ Provenance & Claim-query, query-data, artifact-memory, and version links. & Audi
 \code{replay(artifact)} & Re-execute or audit using recorded snapshots, offsets, code, and memory versions. \\
 \bottomrule
 \end{tabular}
-}
 \caption{Core \amos memory operations.}
 \label{tab:ops}
 \end{table}
 
-Detailed provenance-level, metric, task-level, ablation, extended-probe, and per-axis tables are preserved in the supplementary artifact and the frozen evidence bundle.
-
-\iffalse
+\begin{table}[p]
+\centering
+\small
+\begin{tabular}{L{0.23\linewidth}L{0.34\linewidth}L{0.33\linewidth}}
+\toprule
+\textbf{Role} & \textbf{Local implementation} & \textbf{Production role} \\
+\midrule
+Memory/provenance store & SQLite tables for memory, artifacts, claims, provenance edges, replay packages, and audit logs. & Durable governed state; production could use PostgreSQL/JSONB/pgvector. \\
+SQL engine & DuckDB over synthetic payment events. & Read-only analytical execution and deterministic result-hash replay. \\
+Notebook-style runner & Python controller for parse, retrieve, plan, verify, query, chart, report, cite, and package. & Ordered, testable execution similar to notebook cells. \\
+LLM-agent harness & Offline provider plus OpenAI Responses and authenticated ephemeral Codex CLI transports. & Preserves raw prompts, outputs, model identity, latency, token totals, verifier failures, and repairs. \\
+Verifier & Rule checks over SQL ASTs, schema, metrics, stream state, policy, and claims. & Rejects invalid computation and marks unsupported claims for review. \\
+Artifact store & Filesystem Markdown, SQL, PNG, JSON provenance, and replay files. & Inspectable reports, charts, queries, and replay metadata. \\
+\bottomrule
+\end{tabular}
+\caption{Reference implementation components and their corresponding deployment roles beneath the memory operating layer.}
+\label{tab:prototype}
+\end{table}
 
 \begin{table}[p]
 \centering
@@ -814,7 +779,7 @@ Permission safety & Restricted memory is filtered before active-context construc
 Overhead & Added local runtime for retrieval, verification, provenance recording, and replay packaging. \\
 \bottomrule
 \end{tabular}
-\caption{Evaluation metrics for continuous analytical memory.}
+\caption{Evaluation metrics for a continuous large-scale analytical memory operating layer.}
 \label{tab:metrics}
 \end{table}
 
@@ -884,7 +849,7 @@ OSS-shaped adapters & Payment semantic/catalog task axes 1.0; FTS5 RAG 0.75; ful
 Offline capability analysis (3 domains) & \amos 12/12 seeded variants per domain; strong/OSS adapters 0/12. & Each variant has three deterministic repeats and complete metric-axis traces. \\
 \bottomrule
 \end{tabular}
-\caption{Extended local experiments. These probes add prototype evidence for specific invariants and failure modes.}
+\caption{Extended memory-operating-layer experiments covering correctness, safety, extraction, adapters, and scale.}
 \label{tab:extended-results}
 \end{table}
 
@@ -915,7 +880,6 @@ agent only & 0.0 & 0.0 & 0.0 & 0.75 & 1.0 & 0.0 & 0.0 & 0.0 \\
 \caption{Payment-domain capability axes over twelve seeded variants with three deterministic executions each. Strong local baselines and OSS-shaped adapters can match analytical and permission axes while scoring 0 on claim provenance and replay.}
 \label{tab:metric-axes}
 \end{table}
-\fi
 
 \clearpage
 

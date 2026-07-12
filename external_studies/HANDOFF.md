@@ -4,7 +4,7 @@ This packet is for collaborators who did not implement AMOS. It is deliberately 
 
 ## Before Anyone Authors or Labels Data
 
-1. Read `INDEPENDENT_EVALUATION_PROTOCOL.md` and `PVLDB_2027_SUBMISSION_PLAN.md`.
+1. Read `INDEPENDENT_EVALUATION_PROTOCOL.md` and `evaluation_protocols/pvldb_v20_preregistration.json`.
 2. Verify `evaluation_protocols/pvldb_v20_preregistration.sha256`.
 3. Archive the protocol JSON and sidecar in a timestamped, write-once location controlled by someone outside the implementation team.
 4. Assign pseudonymous participant IDs and preserve the private identity key separately.
