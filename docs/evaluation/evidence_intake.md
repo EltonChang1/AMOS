@@ -1,4 +1,4 @@
-# Independent Evidence Intake
+# AMOS Independent Evidence Intake
 
 This guide converts externally collected tasks, annotations, product runs, and system outputs into auditable AMOS evaluation artifacts. The tools validate evidence; they do not manufacture independence or upgrade synthetic fixtures into human evidence.
 
