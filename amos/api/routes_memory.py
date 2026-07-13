@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from amos.api.identity import Identity, api_context, get_identity
@@ -20,7 +20,7 @@ from amos.api.schemas import (
     new_run_id,
 )
 from amos.agent.controller import write_feedback
-from amos.memory.models import MemoryObject, RetrieveRequest, RetrieveResult
+from amos.memory.models import Authority, MemoryObject, RetrieveRequest, RetrieveResult
 from amos.memory.reconciliation import reconcile
 from amos.memory.retrieval import retrieve
 from amos.memory.store import MemoryStore
@@ -33,7 +33,7 @@ class FeedbackRequest(BaseModel):
     artifact_id: str
     reviewer_role: str
     feedback: str
-    authority: str = "reviewer_approved"
+    authority: Authority = "reviewer_approved"
     effective_start: datetime | None = None
 
 
@@ -199,7 +199,14 @@ def reconcile_memory(
 
 
 @router.post("/feedback", response_model=MemoryObject)
-def feedback(payload: FeedbackRequest) -> MemoryObject:
+def feedback(
+    payload: FeedbackRequest,
+    identity: Identity = Depends(get_identity),
+) -> MemoryObject:
+    if payload.authority == "owner_approved":
+        raise HTTPException(status_code=403, detail="Feedback cannot create owner-approved memory.")
+    if payload.authority == "reviewer_approved" and not {"reviewer", "admin"}.intersection(identity.roles):
+        raise HTTPException(status_code=403, detail="Reviewer-approved feedback requires a reviewer identity.")
     return write_feedback(
         artifact_id=payload.artifact_id,
         reviewer_role=payload.reviewer_role,

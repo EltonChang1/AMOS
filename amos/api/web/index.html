@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#18271f" />
+    <meta
+      name="description"
+      content="AMOS turns high-stakes data questions into verified, cited, replayable answers."
+    />
+    <title>AMOS — Verified analysis</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to analysis workspace</a>
+
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="AMOS home">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span class="brand-word">AMOS</span>
+        <span class="brand-tag">verified analysis</span>
+      </a>
+      <div class="topbar-actions">
+        <span class="environment-pill"><span class="live-dot"></span>Demo data live</span>
+        <label class="identity-picker">
+          <span class="sr-only">Active identity</span>
+          <select id="identity-select" aria-label="Active identity">
+            <option value="analyst_001">Maya · Analyst</option>
+            <option value="reviewer_001">Noah · Reviewer</option>
+            <option value="sre_001">Sam · SRE</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Analysis navigation">
+        <button class="new-analysis-button" id="new-analysis-button" type="button">
+          <span aria-hidden="true">＋</span> New analysis
+        </button>
+
+        <section class="history-section" aria-labelledby="history-title">
+          <div class="section-label-row">
+            <h2 id="history-title">Recent analyses</h2>
+            <span id="history-count">0</span>
+          </div>
+          <div class="history-list" id="history-list">
+            <div class="history-empty">Your verified runs will appear here.</div>
+          </div>
+        </section>
+
+        <div class="sidebar-trust">
+          <span class="trust-symbol" aria-hidden="true">✓</span>
+          <div>
+            <strong>Permission-first</strong>
+            <p>Answers only use memory this identity can access.</p>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main" id="main-content">
+        <section class="composer-section" aria-labelledby="workspace-title">
+          <div class="eyebrow"><span></span> Payment operations workspace</div>
+          <div class="hero-copy">
+            <h1 id="workspace-title">Ask the question.<br /><em>Trust the answer.</em></h1>
+            <p>
+              AMOS checks the metric, schema, data window, and every material claim before an answer
+              reaches your dashboard.
+            </p>
+          </div>
+
+          <form class="composer" id="analysis-form">
+            <label for="question-input">What do you need to know?</label>
+            <textarea
+              id="question-input"
+              rows="3"
+              maxlength="600"
+              required
+              placeholder="Ask about the payment failure spike…"
+            >Why did payment failure rate increase over the last six hours, and should we update the executive dashboard?</textarea>
+            <div class="composer-footer">
+              <div class="scope-row" aria-label="Analysis scope">
+                <span><i class="scope-icon">▦</i> payment_events</span>
+                <span><i class="scope-icon">◷</i> Last 6 hours</span>
+                <span><i class="scope-icon">◈</i> Full provenance</span>
+              </div>
+              <button class="run-button" id="run-button" type="submit">
+                <span>Run verified analysis</span><b aria-hidden="true">→</b>
+              </button>
+            </div>
+          </form>
+
+          <div class="suggestion-row" aria-label="Suggested questions">
+            <span>Try asking</span>
+            <button class="suggestion" type="button" data-question="Which processor and card network contributed most to the payment failure spike?">
+              Find the top contributor
+            </button>
+            <button class="suggestion" type="button" data-question="Why did payment failure rate increase over the last six hours, and should we update the executive dashboard?">
+              Draft a dashboard decision
+            </button>
+          </div>
+        </section>
+
+        <section class="loading-panel" id="loading-panel" hidden aria-live="polite">
+          <div class="loading-orbit" aria-hidden="true"><span></span></div>
+          <div>
+            <div class="eyebrow"><span></span> Verification in progress</div>
+            <h2 id="loading-title">Resolving the approved metric definition…</h2>
+            <div class="progress-track"><span id="progress-bar"></span></div>
+            <p id="loading-detail">Checking accessible memory and the active stream watermark.</p>
+          </div>
+        </section>
+
+        <section class="result-section" id="result-section" hidden aria-live="polite">
+          <div class="result-toolbar">
+            <div>
+              <div class="eyebrow"><span></span> Verified analysis</div>
+              <h2>Payment failure investigation</h2>
+              <p id="result-time">Completed just now</p>
+            </div>
+            <div class="result-actions">
+              <button class="secondary-button" id="review-button" type="button">Add review</button>
+              <button class="replay-button" id="replay-button" type="button">
+                <span aria-hidden="true">↻</span> Replay result
+              </button>
+            </div>
+          </div>
+
+          <div class="verification-strip">
+            <div class="verification-status">
+              <span class="shield-check" aria-hidden="true">✓</span>
+              <div><strong id="verification-label">All checks passed</strong><small>verification status</small></div>
+            </div>
+            <div class="verification-metric"><strong id="coverage-value">100%</strong><small>claim coverage</small></div>
+            <div class="verification-metric"><strong id="claim-count">0</strong><small>cited claims</small></div>
+            <div class="verification-metric"><strong id="memory-count">0</strong><small>memory objects</small></div>
+          </div>
+
+          <div class="result-grid">
+            <article class="report-card">
+              <div class="report-content" id="report-content"></div>
+              <figure class="chart-figure" id="chart-figure" hidden>
+                <div class="chart-heading">
+                  <div><span>Evidence chart</span><strong>Failure rate by event-time hour</strong></div>
+                  <span class="verified-badge">✓ Verified output</span>
+                </div>
+                <img id="result-chart" alt="Payment failure rate by event-time hour" />
+              </figure>
+            </article>
+
+            <aside class="evidence-panel" aria-labelledby="evidence-title">
+              <div class="evidence-header">
+                <div>
+                  <span>Evidence ledger</span>
+                  <h3 id="evidence-title">Claim support</h3>
+                </div>
+                <span class="coverage-ring" id="coverage-ring">100</span>
+              </div>
+              <p class="evidence-intro">Select a claim to inspect the exact support AMOS attached.</p>
+              <div class="claim-list" id="claim-list"></div>
+              <div class="support-detail" id="support-detail" hidden></div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="value-grid" id="value-grid" aria-label="Why AMOS">
+          <article>
+            <span class="value-number">01</span>
+            <h2>Current definitions</h2>
+            <p>Uses approved metrics and active schemas—not whatever happens to fit in a prompt.</p>
+          </article>
+          <article>
+            <span class="value-number">02</span>
+            <h2>Evidence on every claim</h2>
+            <p>Numbers, context, and recommendations carry their support into the final report.</p>
+          </article>
+          <article>
+            <span class="value-number">03</span>
+            <h2>Replayable decisions</h2>
+            <p>Re-run the same queries against the recorded data state and detect what changed.</p>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="review-dialog" id="review-dialog">
+      <form method="dialog" id="review-form">
+        <div class="dialog-header">
+          <div>
+            <span>Human-in-the-loop</span>
+            <h2>Add a review note</h2>
+          </div>
+          <button class="icon-button" id="close-review" type="button" aria-label="Close review dialog">×</button>
+        </div>
+        <p>Your note becomes governed memory and can inform the next run. Reviewer identities can mark it approved.</p>
+        <label for="review-input">Review note</label>
+        <textarea id="review-input" required rows="5" placeholder="Add context, a correction, or an approval condition…"></textarea>
+        <div class="dialog-actions">
+          <button class="secondary-button" value="cancel" type="button" id="cancel-review">Cancel</button>
+          <button class="run-button compact" value="default" type="submit">Save to memory <b aria-hidden="true">→</b></button>
+        </div>
+        <p class="form-message" id="review-message" role="status"></p>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

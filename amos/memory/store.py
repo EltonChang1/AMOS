@@ -348,6 +348,35 @@ class MemoryStore:
             replay_package_id=row["replay_package_id"],
         )
 
+    def list_artifacts(self, *, created_by: str | None = None, limit: int = 20) -> list[ArtifactRecord]:
+        """Return the most recent report artifacts for product history views."""
+
+        self.init_schema()
+        query = "SELECT * FROM artifacts"
+        parameters: list[Any] = []
+        if created_by is not None:
+            query += " WHERE created_by = ?"
+            parameters.append(created_by)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        parameters.append(max(1, min(limit, 100)))
+        with self.connect() as conn:
+            rows = conn.execute(query, parameters).fetchall()
+        return [
+            ArtifactRecord(
+                artifact_id=row["artifact_id"],
+                artifact_type=row["artifact_type"],
+                path=row["path"],
+                user_request=row["user_request"],
+                task_plan_id=row["task_plan_id"],
+                created_at=_parse_dt(row["created_at"]),
+                created_by=row["created_by"],
+                review_status=row["review_status"],
+                provenance_ids=json.loads(row["provenance_ids_json"]),
+                replay_package_id=row["replay_package_id"],
+            )
+            for row in rows
+        ]
+
     def add_claim(self, claim: ClaimRecord) -> None:
         with self.connect() as conn:
             conn.execute(

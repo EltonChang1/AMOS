@@ -94,6 +94,81 @@ def test_task_run_returns_product_contract(seeded: None) -> None:
     assert body["result"]["provenance_coverage"] >= 0.95
 
 
+def test_product_home_and_artifact_workspace(seeded: None) -> None:
+    client = TestClient(app)
+
+    home = client.get("/")
+    assert home.status_code == 200
+    assert "Ask the question" in home.text
+    assert "/static/app.js" in home.text
+
+    run = client.post(
+        "/tasks/run",
+        headers={"X-AMOS-User": "analyst_001"},
+        json={"request": "Why did payment failure rate increase over the last six hours?"},
+    ).json()
+    artifact_id = run["artifact_id"]
+
+    detail_response = client.get(
+        f"/artifacts/{artifact_id}",
+        headers={"X-AMOS-User": "analyst_001"},
+    )
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["artifact"]["artifact_id"] == artifact_id
+    assert "Payment failure rate increased" in detail["report_markdown"]
+    assert detail["provenance_coverage"] >= 0.95
+    assert len(detail["claims"]) >= 4
+    assert len(detail["citations"]) == len(detail["claims"])
+    assert len(detail["chart_urls"]) == 1
+
+    chart_response = client.get(
+        detail["chart_urls"][0],
+        headers={"X-AMOS-User": "analyst_001"},
+    )
+    assert chart_response.status_code == 200
+    assert chart_response.headers["content-type"] == "image/png"
+
+    history = client.get(
+        "/artifacts?limit=10",
+        headers={"X-AMOS-User": "analyst_001"},
+    ).json()
+    assert artifact_id in [artifact["artifact_id"] for artifact in history["artifacts"]]
+
+
+def test_artifact_workspace_is_scoped_to_owner(seeded: None) -> None:
+    client = TestClient(app)
+    run = client.post(
+        "/tasks/run",
+        headers={"X-AMOS-User": "analyst_001"},
+        json={"request": "Why did payment failure rate increase over the last six hours?"},
+    ).json()
+
+    detail = client.get(
+        f"/artifacts/{run['artifact_id']}",
+        headers={"X-AMOS-User": "sre_001"},
+    ).json()
+    assert detail["status"] == "reject"
+    assert detail["artifact"] is None
+
+
+def test_reviewer_approved_feedback_requires_reviewer_identity(seeded: None) -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/memory/feedback",
+        headers={"X-AMOS-User": "analyst_001"},
+        json={
+            "artifact_id": "report_test",
+            "reviewer_role": "analyst",
+            "feedback": "Treat the cause as pending review.",
+            "authority": "reviewer_approved",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "reviewer identity" in response.json()["detail"]
+
+
 def test_artifact_provenance_redacts_restricted_memory(seeded: None) -> None:
     client = TestClient(app)
     store = MemoryStore()

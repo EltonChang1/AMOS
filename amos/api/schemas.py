@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from amos.memory.models import (
     Authority,
+    ArtifactRecord,
     ClaimRecord,
     MemoryObject,
     MemoryStatus,
@@ -176,6 +177,23 @@ class ArtifactProvenanceResponse(ApiContext):
     artifact: dict[str, Any]
     claims: list[dict[str, Any]]
     redactions: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ArtifactListResponse(ApiContext):
+    status: ApiStatus
+    artifacts: list[ArtifactRecord]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ArtifactDetailResponse(ApiContext):
+    status: ApiStatus
+    artifact: ArtifactRecord | None = None
+    report_markdown: str = ""
+    claims: list[ClaimRecord] = Field(default_factory=list)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    chart_urls: list[str] = Field(default_factory=list)
+    provenance_coverage: float = 0.0
     warnings: list[str] = Field(default_factory=list)
 
 
