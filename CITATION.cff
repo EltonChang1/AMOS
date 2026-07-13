@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use AMOS, please cite this manuscript."
-title: "AMOS: A Memory Operating Layer for Continuous Large-Scale Data Analysis Agents"
+title: "AMOS: AMOS: A Memory Operating Layer for Autonomous Data Analysis"
 type: software
 authors:
   - family-names: Chang

@@ -198,7 +198,7 @@ The repository implements the collection boundary described above:
 - `python3 -m amos.evaluation.paired_task_analysis <first> <second>` verifies identical task IDs and reports paired task-resampled intervals and exact McNemar tests;
 - `python3 -m amos.evaluation.external_product_evidence <manifest>` validates external deployment identity and raw evidence.
 
-See `EVIDENCE_INTAKE.md` for manifest fields, prediction shapes, commands, and archival order. Passing repository unit tests proves the intake contract, not the existence or independence of the required human evidence.
+See `docs/evaluation/evidence_intake.md` for manifest fields, prediction shapes, commands, and archival order. Passing repository unit tests proves the intake contract, not the existence or independence of the required human evidence.
 
 ## Completion Gate
 

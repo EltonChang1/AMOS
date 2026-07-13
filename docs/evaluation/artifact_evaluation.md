@@ -28,11 +28,10 @@ After updating the manuscript only from that frozen bundle, attach and hash the 
 ```bash
 python3 -m amos.evaluation.finalize_submission \
   --run-dir artifacts/evaluation/final_paper_run \
-  --tex AMOS_memory_operating_layer.tex \
-  --pdf output/pdf/AMOS_paper.pdf \
-  --supporting-doc PUBLICATION_READINESS_STATUS.md \
-  --supporting-doc INDEPENDENT_EVALUATION_PROTOCOL.md \
-  --supporting-doc EVIDENCE_INTAKE.md
+  --tex papers/research_paper.tex \
+  --pdf papers/AMOS_research_paper.pdf \
+  --supporting-doc docs/evaluation/independent_evaluation_protocol.md \
+  --supporting-doc docs/evaluation/evidence_intake.md
 ```
 
 `source_manifest.json` hashes evaluation code, tests, scenarios, and dependencies before execution. `submission/submission_manifest.json` separately hashes the post-result manuscript, PDF, and supporting documents, avoiding a circular source/manuscript hash.
@@ -106,7 +105,7 @@ With `OPENAI_API_KEY` set, rerun the full command with `--provider-mode auto`. A
 
 ## External-product evidence
 
-Fixture-backed adapters must remain labeled as local export-shaped adapters. Real external runs should follow `INDEPENDENT_EVALUATION_PROTOCOL.md` and can be checked with:
+Fixture-backed adapters must remain labeled as local export-shaped adapters. Real external runs should follow `docs/evaluation/independent_evaluation_protocol.md` and can be checked with:
 
 ```bash
 python3 -m amos.evaluation.external_product_evidence path/to/manifest.json \

@@ -27,7 +27,7 @@ data/**/*.sqlite-*
 data/**/*.duckdb
 data/**/*.duckdb.wal
 
-# LaTeX build products (final PDFs under output/pdf are retained)
+# LaTeX and document build products. Only the two canonical papers are retained.
 *.aux
 *.bbl
 *.bcf
@@ -38,10 +38,15 @@ data/**/*.duckdb.wal
 *.out
 *.run.xml
 *.synctex.gz
-/AMOS_memory_operating_layer.pdf
+*.pdf
+*.docx
+!papers/AMOS_design_proposal.pdf
+!papers/AMOS_research_paper.pdf
 
 # Scratch output
 tmp/
+output/
+venue/
 
 # Generated run artifacts: retain only the paper-facing aggregate evidence.
 artifacts/*
