@@ -9,6 +9,7 @@
 \usepackage{array}
 \usepackage{enumitem}
 \usepackage{tabularx}
+\usepackage{longtable}
 \usepackage{xcolor}
 \usepackage{xspace}
 \usepackage{tikz}
@@ -25,13 +26,13 @@
 \hypersetup{
   pdftitle={AMOS: A Memory Operating Layer for Autonomous Data Analysis},
   pdfauthor={Elton Chang},
-  pdfsubject={AMOS analytical operating system design and research proposal}
+  pdfsubject={End-to-end AMOS product architecture and implementation guide}
 }
 
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small\textcolor{amosblue}{AMOS Startup System Design}}
-\fancyhead[R]{\small\textcolor{gray}{July 2026}}
+\fancyhead[L]{\small\textcolor{amosblue}{AMOS Product Architecture}}
+\fancyhead[R]{\small\textcolor{gray}{End-to-End Build Guide}}
 \fancyfoot[C]{\small\thepage}
 \renewcommand{\headrulewidth}{0.3pt}
 \setlength{\headheight}{14pt}
@@ -48,7 +49,8 @@
 \newcommand{\code}[1]{\texttt{#1}}
 \newcommand{\atxn}{\textsc{A-Txn}\xspace}
 \newcommand{\mem}{\mathcal{M}}
-\newcommand{\task}{\mathcal{T}}
+\newcommand{\state}{\mathcal{S}}
+\newcommand{\work}{\mathcal{W}}
 \newcommand{\prov}{\mathcal{G}}
 
 \begin{document}
@@ -58,381 +60,178 @@
 \end{center}
 
 \begin{abstract}
-Companies do not need another stateless analytics chatbot. They need a persistent analytical operating system that sits over the company's evolving memory, learns how the business defines and analyzes itself, and automates the complete data-analysis loop from request or signal to verified deliverable. This company memory spans data and schemas, metrics and business ontology, policies and authority, prior incidents and decisions, reviewer corrections, execution history, and output conventions. It is durable and governed outside any one model; each task receives only a bounded, permission-safe active context.
+This document is the product architecture and build guide for amos. It defines the theory, system boundaries, data model, runtime protocol, component interfaces, security model, deployment topology, operating model, and phased implementation plan needed to build amos from an empty repository to a production service. The intended reader is a startup engineering team that must make the system work, operate it safely, and know when each layer is complete.
 
-This proposal introduces \amos, a model-neutral analytical operating layer between company memory, analytical applications, and the systems they use. \amos externalizes analytical state as typed, versioned memory; constructs task-specific context; plans and executes SQL, Python, statistical, visualization, and reporting work; verifies results; preserves human review; and revisits prior conclusions when governing evidence changes. A model such as Google Gemma 4 may serve as one replaceable execution engine. The model is not the operating system, and conversational data querying---including a Databricks Genie-style experience---is one application on top of \amos rather than the product boundary.
+\amos is a model-neutral operating layer between autonomous data-analysis applications and a company's data systems. It converts changing schemas, metrics, snapshots, documents, permissions, prior analyses, reviewer corrections, and execution records into governed analytical memory. For each task, it compiles a bounded working set, grants scoped tool capabilities, validates the versions used, verifies the computation, records claim-level support, and commits the artifact with a replay and invalidation contract. Models propose plans and interpretations; deterministic services retain authority over access, execution, validation, and publication.
 
-The full product is a platform on which internal teams and external developers build business-review applications, anomaly-response agents, forecasting workflows, planning tools, finance-reporting agents, operational monitors, and vertical analysis systems. The paper-sized research contribution validates its most important substrate: a governed memory layer and analytical state transaction (\atxn) that connect persistent state, bounded context, execution, publication, claim dependencies, replay, and invalidation. We will compare that substrate with matched agents and a production-faithful composed governance stack under controlled schema, metric, data, document, and policy churn, with explicit acceptance and rejection criteria.
+The architecture is deliberately incremental. A startup first ships a modular monolith that completes one read-only analytical workflow end to end. It then adds durable feedback, scheduling, multi-tenant governance, connector breadth, and controlled autonomy only after explicit correctness, security, reliability, and customer-value gates pass. The result is a complete engineering blueprint rather than a research agenda: every major responsibility has an owner, interface, persistent record, failure behavior, test strategy, and build criterion.
 \end{abstract}
 
-\section{Motivation and Problem}
+\section{Purpose, Audience, and Definition of Complete}
 
-An analyst's job is not a single prompt-to-SQL call. It includes understanding a business objective, discovering and assessing data, selecting methods, executing tools, checking uncertainty and quality, producing artifacts, incorporating review, and monitoring for change. \amos is designed to automate this end-to-end loop continuously while retaining the company's accumulated context between tasks.
+\subsection{Product Definition}
 
-Correctness depends on more than model reasoning. At time $t$, a task observes independently changing state:
-\begin{equation}
-  \task_t = (q_t, D_t, C_t, M_t, X_t, H_{<t}, F_{<t}, P_t),
-\end{equation}
-where $q_t$ is the request, $D_t$ the data snapshot or stream state, $C_t$ schema and catalog state, $M_t$ metric and semantic state, $X_t$ governed documents, $H_{<t}$ prior work, $F_{<t}$ reviewed feedback, and $P_t$ identity and policy.
+\amos is the control and memory plane for autonomous data analysis. It is not a warehouse, a dashboard, a general document search engine, or a particular language model. It is the layer that makes analytical work persistent, permissioned, temporally valid, inspectable, and repeatable across models and applications.
 
-These systems rarely share a transaction manager. Between retrieval and publication, a metric may change, permission may be revoked, a table may migrate, or a watermark may advance. A fluent answer can therefore be state-invalid even when its SQL ran successfully. Prompt expansion and ordinary retrieval do not solve the time-of-check/time-of-use problem; job-level lineage records execution but not necessarily which claim depended on which governing state.
-
-The research problem is:
-
-\begin{quote}
-\emph{Can a governed memory operating layer over heterogeneous analytical state materially reduce state-related failures and audit cost for continuous data analytics agents, compared with conventional agent orchestration and a composed governance stack, without unacceptable latency, false rejection, or operational complexity?}
-\end{quote}
-
-The intended output is not only an artifact $Y_t$, but a validated state observation $V_t$, computation $E_t$, claim dependency graph $\prov_t$, and replay descriptor $R_t$:
-\begin{equation}
-  \task_t \rightarrow (Y_t, V_t, E_t, \prov_t, R_t).
-\end{equation}
-
-\section{Product North Star and Platform Boundary}
-
-\subsection{Three Product Identities}
-
-\amos has three identities that share one operating substrate:
-
+The product has three surfaces over one substrate:
 \begin{enumerate}
-  \item \textbf{Company analytical memory.} A versioned, governed, executable representation of how the company understands its data---not merely a vector database of documents.
-  \item \textbf{Data-analysis agent runtime.} The environment for context construction, planning, model invocation, SQL and Python execution, verification, repair, artifact generation, review escalation, memory updates, scheduling, and recovery.
-  \item \textbf{Autonomous analytics workforce.} Persistent applications that answer questions, explore data, investigate anomalies, monitor metrics and quality, forecast, evaluate experiments, build reports and dashboards, and update conclusions as evidence changes.
+  \item \textbf{Analytical memory:} a typed and versioned representation of the company's metrics, schemas, data states, documents, policies, decisions, prior work, and feedback.
+  \item \textbf{Agent runtime:} a governed execution environment for planning, SQL and Python tools, verification, artifact construction, review, scheduling, and recovery.
+  \item \textbf{Application platform:} APIs and templates for recurring business reviews, investigations, monitors, forecasts, planning workflows, and domain-specific analytical agents.
 \end{enumerate}
 
-This makes the product category explicit: \amos is the operating layer that turns governed company state into continuously executed, verified, replayable analysis. Models are processors used by the layer; warehouses and lakehouses remain systems of record; user experiences and domain agents are applications above it.
+\subsection{Who Uses This Guide}
 
-\subsection{The Company's Analytical Constitution}
+The primary readers are the founding engineer, data-systems engineer, agent-runtime engineer, product engineer, security owner, and design-partner lead. Sections 2--5 define why the system works. Sections 6--12 define what to build. Sections 13--16 define how to ship, operate, test, and expand it.
 
-As \amos observes work and receives governed corrections, it builds a structured analytical constitution. Every learned item carries scope, authority, effective time, permissions, provenance, confidence, and supersession state.
+\subsection{Completeness Standard}
 
-\begin{table}[ht]
-\centering
-\small
-\begin{tabularx}{\linewidth}{L{0.22\linewidth}Y}
-\toprule
-\textbf{Constitution layer} & \textbf{Company-specific memory learned by AMOS} \\
-\midrule
-Business ontology & Customer, account, active user, order, subscription, region, product, campaign, incident, aliases, and relationships. \\
-Metrics & Names, formulas, filters, owners, effective dates, variants, allowed dimensions, and known limitations. \\
-Analytical conventions & Excluded populations, confidence levels, reporting calendars, fiscal periods, attribution rules, minimum samples, and accepted comparison methods. \\
-Organizational authority & Who defines each metric, approves reports, owns each dataset, and whose correction overrides a prior assumption. \\
-Historical knowledge & Prior incidents, recurring seasonal effects, known defects, accepted explanations, rejected hypotheses, and executive decisions. \\
-Output preferences & Report formats, chart styles, detail level, required reviewers, escalation thresholds, and audience-specific language. \\
-\bottomrule
-\end{tabularx}
-\caption{The analytical constitution turns generic model capability into durable, company-specific analytical behavior.}
-\label{tab:constitution}
-\end{table}
-
-Human feedback is therefore a governed state transition, not a note appended to a prompt. A correction such as ``exclude internal accounts'' is stored with its owner, scope, effective interval, supporting decision, and downstream dependencies so it can affect the next report without silently rewriting unrelated work.
-
-\subsection{Applications Built on AMOS}
-
-Internal teams and external developers build analytical applications against stable memory, execution, verification, and artifact interfaces. Representative applications include business-review apps, anomaly-response agents, forecasting workflows, planning tools, finance-reporting agents, operational monitoring, experiment-analysis systems, and vertical-specific analytical products. These applications share the same company constitution and execution history instead of rebuilding context and governance independently.
-
-A natural-language data assistant can ask questions, generate queries, and explain results. That capability is useful but deliberately subordinate: a Databricks Genie-style interface is one side quest among many. The defining product behavior is that \amos preserves and governs what the company knows, runs analytical work repeatedly, learns from review, and re-evaluates outputs when their dependencies change.
-
-\subsection{Model-Neutral Execution}
-
-\amos may route tasks to different model classes: a small local model for memory classification, an embedding model for entity matching, a coding-capable model for SQL or Python, a reasoning model for investigation planning, a multimodal model for chart inspection, and deterministic code for verification. A customer-hosted Google Gemma 4 model is one possible engine, particularly for controlled or on-premise deployments. Models can be upgraded or replaced without losing metric knowledge, schema mappings, reviewer corrections, execution history, provenance, scheduled work, or policies.
-
-\subsection{Compounding Product Moat}
-
-The durable advantage is not access to a particular model. It compounds through six assets: (1) company-specific analytical memory accumulated across years of definitions, corrections, and decisions; (2) execution history containing successful plans, failed queries, useful segmentations, and reviewer behavior; (3) governed feedback that survives the task in which it was given; (4) an analytical dependency graph linking claims, metrics, data, documents, code, decisions, and reports; (5) connectors that understand versions, permissions, schema change, and source semantics; and (6) a reliable runtime that repeats, recovers, validates, and preserves work across model upgrades.
-
-\subsection{Scope}
-
-The product vision and the research contribution are intentionally different in breadth. The product goal is a complete analytical operating system and application platform. The proposed paper-sized contribution validates its substrate: the typed memory model and the \atxn consistency, context-selection, commit, and invalidation protocol. SQL verification, access control, and provenance storage support that memory contract. The prototype targets read-only analytical SQL, governed documents, charts, and report claims. Arbitrary notebook code, general multi-agent scheduling, autonomous writes to production data, and full LLM trajectory determinism are outside the primary research evaluation, not outside the long-term product.
-
-Raw data remains in its systems of record. \amos stores versioned metadata, compact summaries, policy-safe references, execution records, and dependency edges. It is not a new warehouse or universal enterprise knowledge store.
-
-\section{Startup Build Strategy}
-
-The startup should earn the right to build the full platform through a narrow, measurable sequence. The first commercial wedge is recurring operational analysis for data teams that already have a warehouse, defined business metrics, and painful manual review. AMOS begins as a read-only control layer for one high-value workflow, proves that it prevents stale or unsupported analysis, and then expands into a shared runtime for many analytical applications.
-
-\subsection{Ideal First Customer and Initial Wedge}
-
-The ideal design partner is a 50--500 person software or commerce company with a modern cloud warehouse, a small centralized data team, and at least one recurring metric review or incident workflow. The initial buyer is the head of data or analytics; the daily users are analytics engineers, analysts, and operational leaders. A suitable first workflow runs at least weekly, costs several analyst-hours per cycle, depends on governed metric definitions, and has an identifiable reviewer.
-
-The recommended wedge is a payment-health or subscription-health review. It is frequent, economically meaningful, bounded enough to verify, and already represented by the prototype scenarios. The startup should not begin with unrestricted natural-language access to every company table. It should begin with one approved metric family, one source system, read-only SQL, a small set of report templates, and a mandatory human publication gate.
-
-\subsection{Build Principles}
-
-\begin{enumerate}
-  \item \textbf{One vertical slice before platform breadth.} Complete request-to-report execution for one workflow before adding many connectors or agent types.
-  \item \textbf{Governance in the execution path.} Identity, permissions, versions, verification, and provenance are runtime controls, not optional metadata added after generation.
-  \item \textbf{Human approval before autonomy.} Early releases recommend, explain, and package evidence. Autonomous publication is enabled only for task classes with measured reliability and an explicit rollback path.
-  \item \textbf{Deterministic core, replaceable models.} Policy checks, version validation, storage, and evidence capture stay outside model prompts. Model providers can change without erasing company memory.
-  \item \textbf{Every phase has an exit gate.} A phase advances only when customer value, correctness, security, and operability meet predefined thresholds.
-\end{enumerate}
-
-\subsection{Step-by-Step Product Roadmap}
-
-\begin{table}[ht]
-\centering
-\scriptsize
-\begin{tabularx}{\linewidth}{L{0.10\linewidth}L{0.15\linewidth}Y Y}
-\toprule
-\textbf{Step} & \textbf{Product} & \textbf{Build scope} & \textbf{Exit gate} \\
-\midrule
-0: Foundation & Reproducible local core & Typed memory objects, migrations, tenant/identity model, read-only tool boundary, event log, CI, observability, and fixture-backed demo. & One-command setup; tests pass; no secret or cross-tenant data in traces; every demo claim resolves to evidence. \\
-1: Governed answer & Design-partner alpha & One warehouse connector, one metric family, permission-first retrieval, SQL planning, schema/metric verifier, cited answer, and reviewer approval. & At least 90\% safe-and-correct completion on the frozen customer task set; zero confirmed permission leaks; median reviewer time falls by 30\%. \\
-2: Persistent analyst & Private beta & Feedback memory, report and chart artifacts, replay packages, scheduling, freshness checks, and change notifications for the first workflow. & Four consecutive weekly cycles complete without silent state-invalid publication; reviewer corrections affect the next applicable run. \\
-3: Team operating layer & Paid pilot & SSO/RBAC, two additional connectors, audit console, version rollback, incident recovery, usage metering, and service-level objectives. & Three paying design partners; at least two weekly active users per account; 99\% successful scheduled runs excluding source outages. \\
-4: Application platform & General availability & Stable APIs/SDK, application templates, model routing, connector kit, tenant administration, retention controls, and deployment automation. & Five production customers; repeatable onboarding under ten business days; gross margin and support load fit the operating plan. \\
-5: Controlled autonomy & Expansion & Policy-scoped auto-publication, dependency-driven re-analysis, portfolio scheduling, advanced statistical tools, and partner-built applications. & Each autonomous task class passes a separate safety case, rollback drill, and customer approval; expansion revenue exceeds new-logo revenue. \\
-\bottomrule
-\end{tabularx}
-\caption{A startup sequence that turns the AMOS thesis into progressively broader products. Time is secondary to passing each exit gate.}
-\label{tab:startup-roadmap}
-\end{table}
-
-\subsection{Minimum Product Architecture}
-
-The first deployable system has seven services or modules, even if a small team initially packages them as one process: (1) connector adapters that expose source versions and enforce source credentials; (2) a typed memory store; (3) a policy and identity gate; (4) a context compiler; (5) an agent/tool runner; (6) deterministic verification and publication gates; and (7) an evidence store with replay and audit views. A queue supports scheduled work, while an append-only event log supports recovery and debugging. Raw customer data remains in the warehouse; retained samples require explicit policy.
-
-The first production deployment should favor a modular monolith with PostgreSQL, object storage, a managed queue, and isolated tool workers. This keeps transactions and operations understandable for a small team. Service extraction is justified only by tenant isolation, scaling, or deployment requirements. The public contract is the \atxn lifecycle, not the internal service topology.
-
-\subsection{Team, Metrics, and Operating Cadence}
-
-An initial four-to-six person team can cover the wedge: a systems/data engineer for memory and connectors, an agent/runtime engineer, a product engineer for review and audit surfaces, a design-partner lead with analytics depth, and a founder responsible for architecture and customer discovery; security or infrastructure expertise can be fractional until the first paid pilot.
-
-The weekly company scorecard should separate value from safety. Value metrics are analyst-hours saved, time to reviewed answer, weekly completed workflows, reviewer acceptance, and design-partner retention. Safety metrics are state-invalid publication rate, permission incidents, unsupported-claim rate, verifier false rejects, replay success, and mean recovery time. Cost metrics are model cost per accepted artifact, p95 task latency, storage growth, and support hours per account. Growth is not allowed to conceal a regression in permission or publication safety.
-
-Each phase follows the same cadence: discover a customer workflow; freeze its task and policy contract; implement the smallest vertical slice; shadow the existing process; compare results with reviewers; release behind a human gate; instrument failures; and only then generalize reusable primitives. Product requests that do not improve the active phase's exit gate remain out of scope.
-
-\subsection{Commercial and Technical Risks}
-
-The largest commercial risk is becoming a services-heavy analytics consultancy. The mitigation is a fixed onboarding contract, reusable connector interfaces, and a clear limit on customer-specific logic. The largest product risk is a polished assistant without trusted publication behavior; the mitigation is to sell reviewed workflow completion rather than chat. The largest technical risks are source-version ambiguity, verifier false rejection, permission races, and runaway evidence growth. The roadmap measures each explicitly and narrows supported task classes when a safe contract cannot be enforced.
-
-\section{Research Questions and Falsifiable Hypotheses}
-
-The proposal separates analytical accuracy, state validity, security, auditability, and cost. It will not use conformance to an \amos-defined capability checklist as the sole outcome.
-
-\begin{table}[ht]
-\centering
-\small
-\begin{tabularx}{\linewidth}{L{0.08\linewidth}L{0.30\linewidth}Y Y}
-\toprule
- & \textbf{Question} & \textbf{Hypothesis} & \textbf{Disconfirming result} \\
-\midrule
-RQ1 & Does the \amos memory layer reduce state-invalid outputs? & H1: governed memory selection plus publish-time validation improves safe-and-correct completion over a matched agent. & The task-resampled 95\% interval for the paired improvement includes zero, or benign-task utility falls by more than 5 points. \\
-RQ2 & Does a unified memory layer help beyond ordinary composition? & H2: shared typed memory, a version vector, and a commit boundary reduce stale commits and policy races relative to a production-faithful composed stack. & The composed stack is statistically indistinguishable on state-valid completion and race containment at comparable cost. \\
-RQ3 & Does claim dependency tracking help reviewers? & H3: claim-level views improve defect detection or reduce audit time without credible degradation on the other outcome. & Neither primary audit outcome improves, or false alarms materially increase. \\
-RQ4 & What does the memory layer cost? & H4: control-path overhead stays within 25\% of the composed baseline at matched load, with no loss of retrieval recall or throughput collapse as persistent memory grows. & Overhead exceeds the bound without a statistically meaningful correctness or audit benefit. \\
-RQ5 & Does enforcement resist realistic attacks? & H5: external capability enforcement yields zero observed permission leaks and lower attack success than prompt-only or post-filter controls. & Any confirmed permission leak occurs, or benign utility is reduced below the preregistered noninferiority margin. \\
-\bottomrule
-\end{tabularx}
-\caption{Research questions, hypotheses, and explicit rejection conditions.}
-\label{tab:hypotheses}
-\end{table}
-
-The memory-layer thesis is supported only if H1 succeeds against both the matched agent and the composed baseline. H3 and H4 support auditability and practicality; they cannot rescue a null result on the central systems thesis.
-
-\section{Prior Systems and the Novelty Gap}
-
-\subsection{Agent Context and Memory}
-
-Retrieval-augmented generation supplies non-parametric evidence \cite{rag}; long contexts still require selection and can underuse centrally placed information \cite{lostinthemiddle}. ReAct and tool-using agents interleave model reasoning with actions \cite{react,toolformer}. MemGPT explicitly treats prompt context as managed memory \cite{memgpt}; Generative Agents and Reflexion persist observations or verbal feedback \cite{generativeagents,reflexion}. These systems motivate bounded context and durable memory, but do not provide a cross-source analytical version vector or publish-time validation tied to output claims.
-
-\subsection{Analytical State and Reproducibility}
-
-Stream processors formalize event time, watermarks, state, and replay \cite{millwheel,dataflow,flink}; lakehouse systems provide transactional table versions \cite{deltalake}. Semantic layers, catalogs, and data-quality systems govern definitions and validate data \cite{deequ,tfdv}. Text-to-SQL benchmarks increasingly include enterprise schemas and workflow context \cite{spider,bird,spider2}. These systems govern their own resources, but an agent task can span several of them without a common observation and publication boundary.
-
-\subsection{Provenance, Lineage, and Security}
-
-PROV and OpenLineage model entities, activities, datasets, jobs, and runs \cite{provdm,openlineage}; noWorkflow and YesWorkflow capture script and workflow provenance \cite{noworkflow,yesworkflow}. \amos builds on these representations but proposes a lower-granularity dependency between a published claim and the exact analytical state, computation, and review status that governed it. Indirect prompt injection shows why retrieved content cannot be trusted to enforce its own isolation \cite{greshake2023indirect,yi2023bipia}; \amos therefore places capability authorization outside the model.
-
-\subsection{Why This Is Not Merely Renaming Governance as Memory}
-
-No individual \amos component is claimed as new. The proposed novelty is a unified \emph{memory operating abstraction}: persistent typed analytical memory is projected into bounded active context through a task-scoped transaction that joins (1) the versions and policy under which memory was selected, (2) the capabilities under which tools ran, and (3) the claim dependencies committed at publication. This enables optimistic cross-source validation and claim-level invalidation that ordinary orchestration does not provide automatically.
-
-The decisive comparison is not a weak RAG system. It is a production-faithful stack containing an agent orchestrator, permission-filtered retrieval, semantic definitions, catalog/schema metadata, policy enforcement, OpenLineage-style events, and artifact storage. Both systems receive identical models, tools, sources, budgets, and churn events. The experiment asks whether the explicit \atxn abstraction adds measurable value beyond careful integration.
-
-\begin{table}[ht]
-\centering
-\scriptsize
-\begin{tabularx}{\linewidth}{L{0.25\linewidth}C{0.11\linewidth}C{0.12\linewidth}C{0.13\linewidth}C{0.13\linewidth}Y}
-\toprule
-\textbf{System class} & \textbf{Bounded context} & \textbf{Pre-context policy} & \textbf{Cross-source validation} & \textbf{Claim dependencies} & \textbf{Native invalidation unit} \\
-\midrule
-Long context / tool agent & Optional & No & No & No & None \\
-Permission-filtered RAG & Yes & Yes & No & No & Retrieved item \\
-Catalog + semantic + lineage stack & Optional & Configurable & Per-system / orchestrated & Usually artifact or job & Dataset, job, artifact \\
-Agent memory system & Yes & Configurable & No & No & Memory entry \\
-\textbf{\amos memory layer} & \textbf{Role-bounded} & \textbf{Yes} & \textbf{Optimistic vector validation} & \textbf{Yes} & \textbf{Claim} \\
-\bottomrule
-\end{tabularx}
-\caption{The claimed gap is the common transaction and dependency boundary, not ownership of every component. Entries describe the evaluated configurations, not universal limits on each system class.}
-\label{tab:gap}
-\end{table}
-
-\section{Technical Core of the AMOS Memory Layer}
-
-\amos separates persistent analytical memory from bounded model-visible context. At time $t$:
-\begin{equation}
-  \mem_t = (M^d_t, M^c_t, M^m_t, M^x_t, M^h_t, M^f_t, M^p_t),
-\end{equation}
-where the tiers record data or stream state, schema/catalog state, metric semantics, governed documents, prior analytical history, reviewed feedback, and provenance/policy. Each object carries a stable ID, type, source, authority, effective interval, transaction time, permissions, sensitivity, version, status, supersession edges, and provenance reference. Raw records normally remain in source systems; memory objects hold governed metadata, summaries, and immutable references.
-
-The active context $W_t \subset \mem_t$ is a temporary, task-specific projection constrained by identity, time, required roles, and budget. The \atxn is the privileged protocol by which an agent reads this memory projection, uses scoped tools, validates its observations, and writes artifacts, claims, feedback, and provenance back to persistent memory.
-
-An \atxn is a task-scoped state machine:
-\begin{equation}
-  A = (u, q, P^0, V^0, W, K, E, C, \prov, o),
-\end{equation}
-where $u$ is identity, $q$ the task, $P^0$ the policy epoch, $V^0$ a vector of source-version observations, $W$ the bounded working set, $K$ scoped capabilities, $E$ execution records, $C$ extracted or declared claims, $\prov$ typed dependencies, and $o$ the final outcome.
-
-\subsection{Version Vector and Attainable Consistency}
-
-For source systems $s_1,\ldots,s_n$, \amos records:
-\begin{equation}
-  V^0 = \langle (s_j, v_j, \tau_j, \ell_j) \rangle_{j=1}^{n},
-\end{equation}
-where $v_j$ is a snapshot, schema, metric, document, or policy version; $\tau_j$ is observation time; and $\ell_j$ is an optional lease or retention deadline. A version is not assumed to be globally simultaneous with other versions.
-
-Each source is assigned one of three declared consistency classes:
-
+The architecture is complete only when an engineer can answer all of the following without inventing a new subsystem:
 \begin{itemize}
-  \item \textbf{C0 - observed:} a version and observation time are recorded, but the source cannot guarantee retention or monotonic reads.
-  \item \textbf{C1 - validated:} the version can be re-read at commit and changes are detectable.
-  \item \textbf{C2 - leased or immutable:} the version is retained or leased for the task and can be replayed during the declared interval.
+  \item where every governing definition, permission, execution, claim, and artifact is stored;
+  \item how identity and policy are enforced before model-visible context is constructed;
+  \item how a task moves from admission to publication, abort, repair, or human review;
+  \item how source versions are observed and revalidated at commit time;
+  \item how every important claim resolves to computation and governing state;
+  \item how feedback changes future work without silently rewriting history;
+  \item how a source change invalidates dependent conclusions;
+  \item how the service is deployed, monitored, recovered, and tested;
+  \item which capabilities are intentionally deferred and what gate unlocks them.
 \end{itemize}
 
-Task policy specifies the minimum class for each required role. A high-risk report may require C1 policy, schema, and metric state plus C2 data; a low-risk exploration may tolerate C0 documents with a warning. If a source cannot satisfy the requirement, the runtime does not pretend to have a distributed snapshot: it returns \code{warning}, \code{needs\_review}, or \code{reject}.
+\section{The Product Problem and System Boundary}
 
-\subsection{Transaction Protocol}
+An analytical task depends on independently changing state. At time $t$:
+\begin{equation}
+  \state_t = (q_t, D_t, C_t, M_t, X_t, H_{<t}, F_{<t}, P_t),
+\end{equation}
+where $q_t$ is the request or trigger, $D_t$ is the data snapshot or stream position, $C_t$ is schema and catalog state, $M_t$ is metric and semantic state, $X_t$ is governed document state, $H_{<t}$ is prior analytical work, $F_{<t}$ is reviewed feedback, and $P_t$ is identity and policy.
 
-\begin{verbatim}
-A-TXN(request, identity, policy, budget):
-  BEGIN:
-    bind identity; read policy epoch P0; collect source vector V0
-  ADMIT:
-    derive required roles and consistency classes
-    reject or downgrade if capabilities, budget, or versions are unavailable
-  SELECT:
-    filter by policy before candidate ranking
-    reconcile logical keys, authority, effective time, and supersession
-    choose role-complete working set W within context budget
-  EXECUTE:
-    issue task-scoped capabilities K
-    verify each operation against W and policy; record results E
-  VALIDATE:
-    re-read policy epoch and all C1 versions; confirm C2 leases
-    if a governing version changed: abort, repair, or require review
-  COMMIT:
-    extract or accept declared claims C; build dependency graph G
-    atomically commit artifact, C, G, replay descriptors, and audit events
-  INVALIDATE:
-    on later source changes, traverse reverse dependencies and revalidate
-\end{verbatim}
+These sources do not share one transaction manager. A metric can change after retrieval, a table can migrate during execution, a watermark can advance, and a permission can be revoked before publication. A correct-looking answer can therefore be state-invalid even when its SQL ran successfully. The product problem is to control this cross-source state transition without copying all company data into a prompt or replacing the systems of record.
 
-The linearization point is the successful \code{COMMIT} in the \amos store after external-version validation. This does not make external systems atomic with \amos. It guarantees only that the committed record truthfully names the versions validated at publication and that any detected race prevents a final artifact. Changes after commit are handled by invalidation.
+\subsection{Responsibilities}
 
-\subsection{Role-complete Bounded Context}
+\amos owns:
+\begin{itemize}
+  \item typed metadata, governed summaries, external references, aliases, versions, authority, and supersession;
+  \item identity-aware context construction and task-scoped capabilities;
+  \item plan, tool, verification, claim, artifact, review, replay, and invalidation records;
+  \item a stable runtime contract above replaceable models, indexes, warehouses, and application surfaces.
+\end{itemize}
 
-The proposal replaces the undefined goal of a ``sufficient'' context with an operational goal: \emph{role completeness under a declared task schema}. A task parser produces mandatory roles $R(q)$ such as metric, schema, data state, policy, and supporting evidence. Candidate selection solves:
+Source systems continue to own raw data, primary access control, warehouse transactions, catalog records, semantic definitions, document originals, and identity truth. Applications own user experience and domain workflow. Models own no durable authority: model output is a proposal until a deterministic gate accepts it.
+
+\subsection{First Product Scope}
+
+The first production slice supports one tenant, one warehouse, one approved metric family, read-only SQL, governed documents, charts, report claims, reviewer approval, and replay. It excludes arbitrary production writes, unrestricted notebook code, general multi-agent scheduling, unreviewed causal claims, and autonomous external communication. Expansion occurs only through the gates in Section~\ref{sec:build-plan}.
+
+\section{Theory: Analytical Memory as an Operating Layer}
+
+\subsection{Memory Object}
+
+Persistent analytical memory is a set $\mem_t$ of typed objects. Each object is:
+\begin{equation}
+  m = (id, k, v, \tau_e, \tau_r, a, p, s, r, h),
+\end{equation}
+where $k$ is type, $v$ is content or an external reference, $\tau_e$ is the effective-time interval, $\tau_r$ is recording time, $a$ is authority, $p$ is permission scope, $s$ is lifecycle status, $r$ is provenance, and $h$ is a content hash. Logical identity and physical version are separate: multiple versions can describe one metric or schema, but only versions valid for the task interval and policy may govern a run.
+
+Core types are data or stream state, schema/catalog state, semantic definition, governed document, prior analysis, feedback, permission policy, execution, artifact, claim, and provenance edge. Raw fact tables remain external; memory stores identifiers, governed summaries, versions, and immutable references.
+
+\subsection{Bounded Active Context}
+
+The model-visible working set $\work_t \subset \mem_t$ is compiled for one task. It is not ordinary top-$k$ retrieval. Selection must satisfy:
 \begin{align}
-  \max_{W \subseteq \mem} \quad & \sum_{i \in W}(rel_i + auth_i + time_i + active_i) - \lambda cost_i \\
-  \text{s.t.} \quad & permitted(i,P^0) \ \forall i \in W, \\
-  & \sum_{i \in W} tokens(i) \leq B, \\
-  & \forall r \in R(q),\; \exists i \in W: covers(i,r).
+  & permitted(u, p_t, m) && \forall m \in \work_t, \\
+  & effective(m, t_q) \land active(m), && \forall m \in \work_t, \\
+  & \sum_{m \in \work_t} tokens(m) \leq B, \\
+  & \forall r \in R(q): \exists m \in \work_t \text{ covering role } r.
 \end{align}
+The required-role set $R(q)$ typically includes metric, schema, data state, policy, and supporting evidence. A missing mandatory role produces an explicit non-final outcome rather than a guessed answer. This is the central scale separation: persistent memory may grow to millions of objects while model context remains bounded by $B$.
 
-Mandatory-role failure is observable and produces a non-final outcome; it is not hidden by adding more loosely relevant text. Optional evidence fills remaining budget. Retrieval recall is evaluated against independent labels, and omitted candidate counts and uncovered roles are recorded.
+\subsection{Authority, Time, and Supersession}
 
-\paragraph{Logical identity.} Objects are grouped using source-qualified logical keys issued by an owning connector. Cross-source aliases, renames, merges, and splits require explicit alias or supersession edges with authority and effective intervals. Heuristic matches may propose edges but cannot silently establish governing identity. Multiple approved mappings for the same interval produce a conflict.
+Recency alone does not determine truth. The default authority order is owner-approved $>$ reviewer-approved $>$ user note $>$ model hypothesis $>$ untrusted external content. Effective time determines when a statement applies; recording time determines when amos learned it. Supersession edges explicitly replace one logical version with another. Conflicting owner-approved objects for the same interval block publication until resolved.
 
-\subsection{Bounded Verification Semantics}
+\subsection{Consistency Classes}
 
-The SQL verifier does not claim general query equivalence. It supports a declared fragment: read-only relational SQL with approved aggregates, filters, joins, CTEs, grouping, and a bounded set of window constructs. Queries are parsed into relational expressions and checked against schema and metric constraints. Unsupported dialect features, UDFs, approximate functions, ambiguous NULL semantics, or plans beyond the fragment return \code{needs\_review} or \code{reject} rather than an unsound equivalence claim.
-
-Verifier evaluation measures valid acceptance, invalid rejection, false positive and false negative rates, repair success, and repair-induced violations on an independently authored corpus. The research claim is about useful enforcement within the declared fragment.
-
-\subsection{Claims, Support, and Invalidation}
-
-The unit of publication is a \emph{policy-relevant claim}: a numeric, comparison, causal, forecast, or operational statement whose risk policy requires support or review. Structured reports declare claim spans and types. Free-form artifacts use an extractor with conservative thresholds; high-risk publication requires structured claims or human confirmation. Missed-claim rate is therefore a measured failure mode.
-
-For claim $c$, \amos stores typed edges to computations, data versions, semantic definitions, documents, execution hashes, and review decisions. Three properties remain distinct:
-\begin{equation}
-  traceable(c) \not\Rightarrow correct(c) \not\Rightarrow causally\_justified(c).
-\end{equation}
-Provenance establishes traceability. Mechanical verifiers can establish limited computation-to-result consistency. Causal and high-impact operational conclusions remain review-gated unless supported by an approved design.
-
-When source version $v$ is superseded or revoked, reverse traversal finds dependent claims. Each claim is rechecked against its policy: it may remain valid, become stale, be revoked, or require review. The research question is whether this finer invalidation unit reduces review work and missed defects relative to artifact- or job-level lineage.
-
-\subsection{Replay Semantics}
-
-Replay is decomposed into measurable levels:
-
+Each connector declares the strongest attainable observation class:
 \begin{itemize}
-  \item \textbf{Computational replay:} rerun deterministic computation against retained inputs; compare result hashes or declared numeric tolerances.
-  \item \textbf{Evidence reconstruction:} recover the versions, queries, documents, and review records used at publication.
-  \item \textbf{Artifact regeneration:} regenerate charts or structured reports and compare declared semantic fields, not necessarily pixels or prose.
-  \item \textbf{Trajectory replay:} reproduce the entire model interaction. This is recorded when possible but is not a core guarantee because providers and sampling can be nondeterministic.
+  \item \textbf{C0 observed:} the version and observation time are recorded, but the source cannot guarantee re-readability.
+  \item \textbf{C1 validated:} the version can be re-read or compared at commit, so changes are detectable.
+  \item \textbf{C2 retained:} the exact version is retained or leased long enough for deterministic reconstruction.
 \end{itemize}
+Task policy declares minimum classes per required role. Regulated or high-impact artifacts may require C2 data and C1 policy/semantic state; exploratory tasks may accept C0 with a visible warning.
 
-An artifact is labeled replayable only at a named level. C2 versions are required for computational replay; C0/C1 sources can still support historical evidence reconstruction.
+\section{The Analytical State Transaction}
 
-\subsection{Security Guarantee Boundary}
+\atxn is the system contract connecting memory, tools, validation, publication, and later invalidation. It is not an ACID transaction across external systems. It creates a truthful AMOS commit record after optimistic revalidation of the external versions used.
 
-Retrieved text is treated as untrusted data, but labeling alone is not a security guarantee. Guarantees come from pre-context authorization, tenant-scoped indexes and caches, external capability checks, structured tool APIs, output validation, and commit-time policy revalidation. The model may follow an injected instruction; it still cannot acquire a capability or publish restricted provenance unless the external control plane authorizes it.
+\subsection{Transaction Record}
 
-The threat model includes malicious retrieved content, malicious authorized users, compromised documents, cross-tenant index leakage, permission-revocation races, provenance expansion, multi-turn poisoning, inference through filtered results, and denial of service. Source-system compromise, aggregate inference below source-enforced privacy thresholds, and side channels outside the measured interfaces are documented residual risks.
+An atxn record contains:
+\begin{equation}
+  A = (id, u, q, P^0, V^0, \work, K, E, C, \prov, o, t),
+\end{equation}
+where $P^0$ is the admitted policy epoch, $V^0$ is the source-version vector, $K$ is the scoped capability set, $E$ is execution evidence, $C$ is the claim set, $\prov$ is the dependency graph, $o$ is outcome, and $t$ contains lifecycle timestamps.
 
-\section{Why a Memory Operating Layer?}
+\subsection{Lifecycle}
 
-The term is used narrowly, not as a claim that \amos is a general-purpose operating system. \amos interposes on memory movement and the scarce or privileged analytical resources attached to it:
+\begin{enumerate}
+  \item \textbf{BEGIN:} authenticate identity, bind tenant, classify risk, assign budgets, record policy epoch, and create an idempotent transaction ID.
+  \item \textbf{OBSERVE:} ask connectors for source versions, freshness, retention class, and access capabilities.
+  \item \textbf{SELECT:} filter candidates before ranking; reconcile identity, time, authority, and supersession; require role completeness.
+  \item \textbf{PLAN:} produce a typed plan with declared inputs, tool operations, expected outputs, budgets, and review obligations.
+  \item \textbf{EXECUTE:} issue short-lived capabilities to isolated workers; verify each operation before execution; record parameters, hashes, timings, and results.
+  \item \textbf{COMPOSE:} generate artifact structure and extract policy-relevant claims.
+  \item \textbf{VERIFY:} validate SQL, schema, metrics, freshness, permissions, claim support, and risk-specific rules.
+  \item \textbf{REVALIDATE:} re-read the policy epoch and every C1 version; confirm C2 retention leases.
+  \item \textbf{COMMIT:} atomically store artifact metadata, claims, dependencies, verification, replay descriptor, and audit event.
+  \item \textbf{INVALIDATE:} on later source events, traverse reverse dependencies and mark claims stale, revoked, or review-required.
+\end{enumerate}
+
+\subsection{Runtime Invariants}
+
+The implementation must enforce these invariants:
+\begin{enumerate}
+  \item no inaccessible memory enters model-visible context;
+  \item every selected object is effective, active, non-superseded, and source-qualified;
+  \item every tool call is allowed by both policy and a task-scoped capability;
+  \item execution references only declared working-set objects and observed source versions;
+  \item numeric claims have computation, data-state, schema, and metric support;
+  \item causal or high-impact recommendations remain review-gated unless an approved design permits automation;
+  \item commit fails or becomes explicitly non-final when governing C1 state changed;
+  \item memory writes preserve authority, history, source, and the transaction that produced them;
+  \item every final artifact has a declared replay level and complete audit record.
+\end{enumerate}
+
+\subsection{Outcome State Machine}
 
 \begin{table}[ht]
 \centering
 \small
-\begin{tabularx}{\linewidth}{L{0.22\linewidth}Y Y}
+\begin{tabularx}{\linewidth}{L{0.17\linewidth}L{0.22\linewidth}Y}
 \toprule
-\textbf{Operating concept} & \textbf{AMOS resource or mechanism} & \textbf{Enforced property} \\
+\textbf{Outcome} & \textbf{Meaning} & \textbf{Required behavior} \\
 \midrule
-Isolation domain & Tenant, identity, task, and policy epoch & No cross-domain context or capability use \\
-Admission control & Required roles, consistency class, token and execution budgets & Unsafe or incomplete tasks do not silently proceed \\
-Memory management & Persistent typed state and bounded active context & Prompt cost remains bounded as history grows \\
-Capabilities & Task-scoped tool and publication permissions & Privileged operations are external to model text \\
-Resource accounting & Tokens, rows, runtime, cost, review, provenance level & Auditable per-task consumption \\
-Fault containment & Abort, repair, warning, review, reject, invalidation & Races and stale state do not become silent final output \\
-Commit and recovery & Version validation, atomic evidence commit, idempotent retries & Publication has a defined state and recovery point \\
+pass & All required checks succeed. & Commit as final within the declared risk class and replay level. \\
+warning & Work is structurally valid with a disclosed limitation. & Commit as non-final or limited-use; surface the exact warning and affected claims. \\
+repair & A bounded, policy-safe correction is possible. & Record failed attempt, patch the plan or operation, and retry within budget. \\
+needs\_review & Evidence exists but judgment or approval is required. & Commit evidence and draft artifact; create a review task; prohibit final publication. \\
+reject & Policy, safety, validity, or support fails. & Store the rejection and diagnostics; do not publish the artifact. \\
+abort & Infrastructure, lease, source, or concurrency failure prevents a truthful decision. & Preserve partial evidence, release capabilities, and allow idempotent retry. \\
 \bottomrule
 \end{tabularx}
-\caption{The memory operating-layer analogy is grounded in context management, interposition, and resource control. Scheduling models across independent agents is outside this proposal.}
+\caption{Every task ends in an explicit state; silence and best-effort finalization are forbidden.}
 \end{table}
 
-If evaluation shows that these mechanisms provide no benefit beyond ordinary composition, the operating-layer framing is rejected and the result should be reported as governed analytical middleware.
+\section{End-to-End Product Architecture}
 
-\section{AMOS Memory-Layer Architecture and Prototype Scope}
-
-The platform is organized into six cooperating planes. The \atxn mechanism below is the transaction boundary across the middle four planes, while applications consume the resulting runtime through stable interfaces.
-
-\begin{table}[ht]
-\centering
-\small
-\begin{tabularx}{\linewidth}{L{0.18\linewidth}Y Y}
-\toprule
-\textbf{Plane} & \textbf{Responsibility} & \textbf{Representative components} \\
-\midrule
-Source & Connect to governed systems without needlessly copying raw data & Warehouses, lakehouses, streams, catalogs, semantic layers, BI, documents, code, identity, policy \\
-Memory & Maintain the persistent company model & Typed objects, bitemporal versions, ownership, authority, aliases, feedback, artifacts, provenance graph \\
-Context & Construct bounded task state & Permission-first filtering, retrieval, reconciliation, compaction, required-role and uncertainty reporting \\
-Agent runtime & Perform the analytical workload & Planner, model router, tools, budgets, retries, checkpoints, scheduling, recovery \\
-Verification & Decide what can be accepted or published & Schema, metric, freshness, statistical, claim-support, policy, reproducibility, and review gates \\
-Artifact and interaction & Deliver results and host applications & APIs, web, chat, notebooks, dashboards, alerts, reports, decks, email, and collaboration tools \\
-\bottomrule
-\end{tabularx}
-\caption{AMOS platform planes separate durable company memory and runtime control from replaceable models, tools, data systems, and user-facing applications.}
-\label{tab:planes}
-\end{table}
+The startup should implement the first release as a modular monolith with strict internal interfaces. This provides one transactional database, one deployment unit, and one debugging surface while preserving seams for later service extraction.
 
 \begin{figure}[ht]
 \centering
 \begin{tikzpicture}[
-  scale=0.93,transform shape,
+  scale=0.92,transform shape,
   every node/.style={font=\scriptsize,align=center},
   flow/.style={-Latex,semithick,draw=amosblue},
   box/.style={draw=amosblue,rounded corners=2pt,fill=amoslight,minimum height=8mm,inner sep=4pt},
@@ -440,349 +239,495 @@ Artifact and interaction & Deliver results and host applications & APIs, web, ch
   store/.style={draw=green!45!black,rounded corners=2pt,fill=amosgreen,minimum width=32mm,inner sep=4pt},
   ext/.style={draw=gray!65,rounded corners=2pt,fill=amosgray,minimum width=35mm,inner sep=4pt}
 ]
-\node[box] (begin) {BEGIN / ADMIT\\identity + version vector};
-\node[gate,right=7mm of begin] (select) {SELECT\\policy + role coverage};
-\node[box,right=7mm of select] (agent) {Agent\\bounded working set};
-\node[gate,below=7mm of agent] (execute) {EXECUTE\\verify + capabilities};
-\node[ext,right=9mm of execute] (sources) {External systems\\warehouse, streams, catalog,\\metrics, policy, documents};
-\node[gate,below=7mm of execute] (validate) {VALIDATE\\versions + policy epoch};
-\node[gate,left=7mm of validate] (commit) {COMMIT\\claims + dependencies};
-\node[store,below=8mm of select] (memory) {Governed state store\\objects, aliases, versions,\\effective time, authority};
-\node[store,below=8mm of commit] (graph) {Evidence store\\claims, dependency edges,\\replay, audit, invalidation};
-\node[box,left=7mm of commit] (artifact) {Final artifact\\or explicit non-final outcome};
+\node[ext] (apps) {Applications\\web, API, schedules};
+\node[box,right=7mm of apps] (api) {API + admission\\identity, tenant, risk};
+\node[gate,right=7mm of api] (context) {Context compiler\\filter + reconcile};
+\node[box,below=8mm of context] (runtime) {Agent runtime\\plan + model router};
+\node[gate,left=7mm of runtime] (verify) {Verifier\\pre + post checks};
+\node[box,left=7mm of verify] (workers) {Tool workers\\SQL, Python, charts};
+\node[store,below=8mm of api] (state) {PostgreSQL\\memory, A-Txn, audit};
+\node[store,below=8mm of verify] (objects) {Object storage\\artifacts + evidence};
+\node[ext,below=8mm of workers] (sources) {External sources\\warehouse, catalog, IAM};
+\node[box,right=7mm of objects] (events) {Queue + event log\\schedule, invalidate};
 
-\draw[flow] (begin) -- (select);
-\draw[flow] (select) -- (agent);
-\draw[flow] (agent) -- (execute);
-\draw[flow] (execute) -- (sources);
-\draw[flow] (sources) |- (validate);
-\draw[flow] (validate) -- (commit);
-\draw[flow] (commit) -- (artifact);
-\draw[flow] (memory) -- (select);
-\draw[flow] (memory) -- (validate);
-\draw[flow] (commit) -- (graph);
-\draw[flow] (graph) -- (artifact);
-\draw[flow,dashed] (graph.east) -| ([xshift=4mm]sources.south);
-
-\node[draw=amosblue,rounded corners=3pt,fit=(begin)(select)(agent)(execute)(validate)(commit),inner sep=5pt,
-      label={[font=\scriptsize\bfseries,text=amosblue]above:AMOS memory operating layer}] {};
+\draw[flow] (apps) -- (api);
+\draw[flow] (api) -- (context);
+\draw[flow] (context) -- (runtime);
+\draw[flow] (runtime) -- (verify);
+\draw[flow] (verify) -- (workers);
+\draw[flow] (workers) -- (sources);
+\draw[flow] (api) -- (state);
+\draw[flow] (context) -- (state);
+\draw[flow] (verify) -- (objects);
+\draw[flow] (state) -- (events);
+\draw[flow] (events) -- (runtime);
+\draw[flow,dashed] (sources) -- (events);
 \end{tikzpicture}
-\caption{AMOS memory-layer architecture. \atxn governs each memory projection and publication; dashed flow denotes later source-change events triggering claim-level invalidation.}
+\caption{Production logical architecture. Internal boundaries remain explicit even when deployed as one application.}
 \label{fig:architecture}
 \end{figure}
 
-The existing reference prototype supplies a feasibility base: Python 3.11, SQLite FTS5 for typed memory, DuckDB for analytical execution, SQLGlot for parsing, FastAPI endpoints, versioned provenance records, and replay packages. The research implementation will add the \atxn state machine, source-version adapters, optimistic validation, task-scoped capability tokens, claim dependency traversal, and the composed baseline.
+\subsection{Component Responsibilities}
 
-The prototype will support three domains already represented in the artifact: payment failure, subscription churn, and warehouse quality. Each has independent schema, metric, temporal, permission, and review state. Storage and candidate-generation backends remain replaceable so the systems study can compare BM25, vector, and hybrid indexes under identical governance.
+\begin{table}[ht]
+\centering
+\scriptsize
+\begin{tabularx}{\linewidth}{L{0.18\linewidth}Y Y}
+\toprule
+\textbf{Component} & \textbf{Owns} & \textbf{Must not own} \\
+\midrule
+API and admission & Authentication, tenant binding, request validation, idempotency, risk class, quotas. & Prompt construction, warehouse credentials, or final publication logic. \\
+Connector manager & Source discovery, version observation, freshness, access probes, change events, read handles. & Cross-source reconciliation or company-wide policy decisions. \\
+Memory service & Typed objects, versions, authority, effective time, aliases, supersession, indexes. & Arbitrary raw customer data or model prompts as the system of record. \\
+Context compiler & Required-role derivation, policy-first filtering, ranking, reconciliation, compaction, manifest. & Tool execution or hidden fallback when a required role is missing. \\
+Agent runtime & Typed planning, model routing, budgets, checkpoints, repair loop, artifact draft. & Credentials, unrestricted tools, or authority to bypass verifier outcomes. \\
+Tool workers & Sandboxed SQL, Python, statistics, charting, deterministic result capture. & Long-lived tenant secrets or direct publication. \\
+Verifier & SQL safety, schema, metrics, freshness, permissions, claim support, risk and review rules. & General truth or causal certainty beyond declared rules. \\
+Evidence service & Claims, dependency edges, hashes, verification, artifacts, replay descriptors. & Silent mutation of committed evidence. \\
+Scheduler and invalidator & Durable jobs, retries, source-change fan-out, revalidation and review tasks. & Unbounded automatic reruns or publication without current policy. \\
+Review application & Evidence inspection, approve/reject/correct, scoped feedback, audit export. & Direct mutation of historical objects or unscoped high-authority feedback. \\
+\bottomrule
+\end{tabularx}
+\caption{Ownership boundaries prevent the language model or any single service from becoming an implicit superuser.}
+\end{table}
 
-\paragraph{Preliminary engineering evidence.} The current development artifact passes 85 local regression tests and seeded probes, and it has exercised indexed storage at 1,000,001 memory objects and 1,000,000 provenance edges. These results establish implementation feasibility and reveal a tail-latency bottleneck; they are not independent evidence for H1-H5 and will not be reused as confirmatory holdout data.
+\section{Product Surfaces and Operating Workflows}
 
-\section{Experimental Methodology}
-
-The evaluation is preregistered before external labels or outputs are opened. Independent tasks, annotations, attacks, and human-study records are the statistical units; repeated model samples of the same task are not treated as independent evidence.
-
-\subsection{Systems and Fairness Controls}
+The control plane is useful only when its state is legible to customers. AMOS therefore ships four product surfaces over the same APIs and permission checks; none receives privileged database access.
 
 \begin{table}[ht]
 \centering
 \small
-\begin{tabularx}{\linewidth}{L{0.25\linewidth}Y Y}
+\begin{tabularx}{\linewidth}{L{0.18\linewidth}L{0.25\linewidth}Y}
 \toprule
-\textbf{Arm} & \textbf{Purpose} & \textbf{Fairness constraint} \\
+\textbf{Surface} & \textbf{Primary user} & \textbf{Required capabilities} \\
 \midrule
-Tool agent without persistent state & Lower bound for ordinary agent execution & Same model, tools, credentials, and task prompt \\
-Long-context agent & Tests whether context size substitutes for state management & Same accessible state and maximum token budget \\
-Permission-filtered RAG & Tests retrieval plus pre-context access control & Same candidate index and permission labels \\
-Semantic/catalog agent & Tests current schema and metric grounding & Same definitions, tools, and version events \\
-Catalog + lineage agent & Tests conventional metadata and job-level provenance & Native artifact/job lineage enabled \\
-\textbf{Production-faithful composed stack} & \textbf{Decisive novelty baseline} & Agent orchestrator + filtered retrieval + semantic layer + catalog + policy engine + OpenLineage-shaped events + artifact store; no \amos verifier or claim graph \\
-\textbf{AMOS} & Full memory layer with \atxn protocol & Same model, data, tools, context budget, retries, timeouts, and churn schedule \\
-\textbf{AMOS ablations} & Isolate mechanisms & Remove one mechanism while preserving all others \\
+Memory Studio & Data owner and administrator & Connect and test sources; inspect discovered objects and versions; define aliases, metrics, authority, retention, and policies; approve changes; view source health and impact before activation. \\
+Analysis Workspace & Analyst and business operator & Submit or schedule a typed task; see admitted scope, plan, budget, progress, warnings, and terminal state; inspect an artifact down to claim, computation, and source; export approved results. \\
+Review Queue & Reviewer and domain owner & Compare evidence with the draft; approve, reject, or correct at claim, metric, template, or policy scope; assign effective time and authority; see which future tasks and existing claims are affected. \\
+Operations Console & Support, security, and platform operator & Search transactions and audit events; inspect connector, queue, worker, and policy health; retry an idempotent step, revoke a capability, quarantine a connector, revalidate claims, and run recovery procedures. \\
 \bottomrule
 \end{tabularx}
-\caption{Comparison arms. Prompts and adapters will be published; systems receive matched information rather than intentionally missing inputs.}
-\label{tab:arms}
+\caption{The product exposes governed state and explicit controls instead of presenting an opaque chat transcript.}
 \end{table}
 
-The composed stack is implemented before holdout release and reviewed by an engineer not responsible for \amos scoring. It receives explicit orchestration for version reads and artifact storage, so the experiment tests whether the \amos memory layer improves correctness or complexity beyond a credible integration, not whether other tools happen to omit a feature.
+\subsection{Customer Journey}
 
-\subsection{Independent Task Study}
+Onboarding is an auditable promotion workflow. An administrator creates the tenant, connects a read-only source, confirms identity synchronization, and chooses retention and region. The connector discovers schemas and capabilities into a staging namespace. A data owner resolves aliases, defines or imports a metric, assigns authority, and approves a version. A product owner then configures an application template with task schema, required roles, risk class, review rule, schedule, budget, and artifact shape. Production activation is prohibited until connector, permission, metric, task-fixture, and recovery checks pass.
 
-At least three analysts who did not implement \amos will author 50 tasks in each of three domains, for 150 independent tasks. A different analyst reviews each task for realism and ambiguity; two annotators label required evidence, forbidden evidence, expected SQL or method, state-valid outcome, and review obligations before separate adjudication. Tasks are frozen and hashed before system tuning.
+During normal use, a request or schedule creates a transaction and immediately displays its policy scope. The workspace streams durable state changes rather than model tokens as the source of truth. A user can open the exact context manifest, each execution, each verifier result, and the dependency chain of every material claim. Final status distinguishes \emph{published}, \emph{published with warning}, \emph{awaiting review}, \emph{rejected}, \emph{stale}, and \emph{revoked}; a draft is never visually equivalent to a governed artifact.
 
-Each task is expressed with three neutral prompt frames and run on three independently frozen model families. The primary paired contrast, \amos versus the matched agent without \amos, requires 2,700 intended executions. Secondary arms run on the same task set under a declared sampling plan. Every intended execution remains in the denominator; provider, timeout, verifier, and malformed-output failures are preserved.
+After review, corrections append new governed objects and show their scope before confirmation. The next applicable transaction selects them by authority and effective time. Source or policy change computes impact, marks dependent claims, and either revalidates, schedules bounded re-analysis, or requests review. The user can always answer: what changed, what AMOS did, what remains valid, and who has authority to resolve the rest.
 
-Workloads mix normal analysis with controlled evolution:
+\subsection{Experience Invariants}
 
-\begin{itemize}
-  \item schema additions, renames, removals, aliases, joins, and type changes;
-  \item metric numerator, denominator, filter, unit, and effective-time changes;
-  \item snapshot advancement, watermark lag, late data, retention, and missing partitions;
-  \item document supersession, conflicting approvals, and malicious evidence;
-  \item permission revocation, role change, policy-cache churn, and provenance expansion;
-  \item unchanged benign tasks to measure false warnings, unnecessary review, and utility loss.
-\end{itemize}
+Every UI action uses the same idempotent API and produces an audit event. Hidden background work has a visible job and owner. Destructive actions are modeled as revocation, supersession, or policy-governed erasure. Restricted object names and failure details are redacted at the API, not merely in the interface. No screen offers a bypass around review, verification, retention, or tenant boundaries.
 
-Churn events occur before selection, during execution, and immediately before commit to exercise the consistency protocol. A task is not designed around \amos terminology and may require completion, clarification, warning, repair, rejection, or human review.
+\section{Data Architecture and Persistent Contracts}
 
-\subsection{Outcomes}
+\subsection{Core Relational Model}
 
-The preregistered primary endpoint is safe-and-correct completion, but it will never be reported alone. The paper will independently report:
+Use PostgreSQL as the authoritative store. Object storage holds large artifacts, source exports, chart images, and retained execution payloads. A queue transports durable jobs; it does not replace the transaction log.
 
-\begin{itemize}
-  \item analytical answer and SQL correctness;
-  \item schema, metric, temporal, and document-state correctness;
-  \item permission violations and restricted-evidence exposure;
-  \item retrieval recall, role coverage, stale selection, and omitted-evidence errors;
-  \item unsupported-claim rate and review-obligation precision/recall;
-  \item false rejection, false warning, repair success, and unnecessary-review rates;
-  \item computational replay and evidence-reconstruction success;
-  \item end-to-end and control-path latency, tokens, execution cost, and storage.
-\end{itemize}
-
-The independent task is the primary statistical unit. Paired differences use 10,000-replicate task-cluster bootstrap intervals. A logistic mixed-effects model includes task and author random intercepts and system, model, and prompt fixed effects. Holm correction applies to confirmatory secondary contrasts. Effect sizes, uncertainty intervals, per-task outcomes, and all failures will be released.
-
-\subsection{Verifier Study}
-
-A separately authored 400-query corpus contains 200 valid and 200 invalid cases across aliases, derived columns, CTEs, nested and correlated subqueries, joins, windows, grouping sets, conditional aggregates, NULL behavior, dialects, stale fields, missing metric predicates, comments, obfuscation, writes, DDL, exports, and unsafe functions. Two annotators label each case and adjudicate disagreements.
-
-Primary metrics are valid acceptance, invalid rejection, false positive and false negative rates, repair success, and repair-induced violation rate. Headline use of the verifier requires at least 0.95 valid acceptance, 0.95 invalid rejection, and at most 0.02 repair-induced violations. Failing a construct family narrows the supported SQL fragment; it does not permit task-specific patching after unblinding.
-
-\subsection{Claim and Human Audit Studies}
-
-The claim corpus contains at least 120 raw reports, notebooks, slides, chart annotations, dashboard texts, table cells, and fragments with at least 600 adjudicated claims. Splits are by source artifact and author. Regex, prompted LLM, structured-output LLM, and a competitive supervised model are compared on exact-span F1, claim-type macro-F1, review-obligation F1, unsupported-claim F1, and evidence-link F1.
-
-A within-participant, randomized, counterbalanced audit study recruits at least 36 technically qualified participants. Participants inspect seeded reports under either claim-level dependencies or ordinary citations plus job logs. Primary outcomes are defect-detection rate and audit time; secondary outcomes are false alarms, confidence, replay success, and usability. H3 requires improvement in at least one primary outcome without credible degradation in the other.
-
-\subsection{Security Study}
-
-At least three independent red-teamers create 120 attacks across direct and indirect prompt injection, cross-user leakage, malicious authoritative sources, permission revocation, provenance expansion, timing or filtered-result inference, and multi-turn memory poisoning. Protected assets, attacker knowledge, allowed credentials, and success criteria are frozen in advance.
-
-The primary security outcome is attack success rate, paired with safe-and-correct completion on matched benign tasks. A confirmed permission leak fails the headline security gate. The study distinguishes model compromise from system compromise: an injected model response counts as contained if external capabilities and publication gates prevent unauthorized effects.
-
-\subsection{Systems, Scale, Churn, and Recovery}
-
-Systems experiments use 10,000, 100,000, and 1,000,000 memory objects with matched provenance graphs, plus sensitivity runs at higher fan-out where hardware permits. Workloads vary context budget, candidate engine, 1-64 concurrent readers, mixed reads/writes, policy and schema churn, invalidation fan-out, cache state, source delay, connector failure, and store restart.
-
-Measurements include p50/p95/p99 retrieval and transaction latency, throughput, CPU, memory, storage amplification, token use, cost, stale-commit rate, version-validation aborts, retry amplification, invalidation completion, recovery time, and correctness after recovery. H4 fails if \amos exceeds 25\% matched control-path overhead without a significant state-validity or audit benefit, or if correctness drops by more than five points as persistent state scales while context budget remains fixed.
-
-\subsection{Ablations}
-
-The ablation matrix removes one mechanism at a time:
-
-\begin{itemize}
-  \item no publish-time version or policy revalidation;
-  \item no effective-time or authority reconciliation;
-  \item post-retrieval permission filtering instead of index pushdown;
-  \item unconstrained top-$k$ retrieval instead of mandatory role coverage;
-  \item artifact-level lineage instead of claim dependencies;
-  \item no reverse invalidation traversal;
-  \item C0 observation only instead of C1/C2 consistency classes.
-\end{itemize}
-
-The purpose is to identify which part of \atxn causes any observed benefit. If the full system improves but no mechanism explains the effect, the proposal will report the result as unresolved rather than attributing it to the abstraction.
-
-\section{Success, Failure, and Interpretation}
-
-\begin{table}[ht]
-\centering
-\small
-\begin{tabularx}{\linewidth}{L{0.25\linewidth}Y Y}
+\begin{longtable}{L{0.21\linewidth}L{0.26\linewidth}L{0.45\linewidth}}
 \toprule
-\textbf{Result pattern} & \textbf{Interpretation} & \textbf{Required action} \\
+\textbf{Table} & \textbf{Primary identity} & \textbf{Required content and rule} \\
 \midrule
-AMOS beats weak agents but not composed stack & Integration, not a new abstraction, explains the gain & Reject H2; position artifact as reference integration \\
-Correctness improves but false rejects or review burden exceed gates & Safety-utility tradeoff is unacceptable & Narrow policies or reject H1 for general use \\
-Claim views improve detection but not time & Auditability benefit with operator cost & Report both; do not claim reduced audit cost \\
-Overhead exceeds 25\% with meaningful safety gain & Mechanism works but is not yet practical & Publish cost boundary; narrow deployment scope \\
-No effect on independent tasks & Seeded development tasks overfit the design & Report null result; release benchmark and failure analysis \\
-Any permission leak & Security boundary failed & Remove security headline; repair only on a fresh holdout \\
+\endhead
+tenants & tenant\_id & Status, retention policy, encryption key reference, feature gates. Every governed row includes tenant\_id. \\
+identities & tenant\_id + subject\_id & Provider, roles, groups, policy attributes, last synchronized epoch. \\
+source\_systems & source\_id & Connector type, configuration reference, attainable consistency classes, health. No plaintext secret. \\
+memory\_objects & object\_id & Type, logical key, source, authority, permissions, effective interval, recorded time, status, content hash, external reference. \\
+memory\_versions & logical\_key + version & Immutable content or reference, source version, transaction time, supersedes link. Updates append; they do not overwrite. \\
+alias\_edges & edge\_id & Source-qualified logical identity mapping, authority, effective interval, reviewer state. \\
+policies & policy\_id + epoch & Declarative admission, retrieval, tool, publication, retention, and review rules. \\
+a\_transactions & transaction\_id & Request, identity, risk, budgets, state, policy epoch, version vector, timestamps, terminal outcome. \\
+context\_manifests & manifest\_id & Selected object versions, required-role coverage, omissions, conflicts, token counts, ranking trace. \\
+plans & plan\_id & Typed steps, declared inputs/outputs, tools, budgets, dependencies, model/configuration identity. \\
+executions & execution\_id & Capability, worker, tool version, parameters hash, input versions, output reference/hash, latency, cost, status. \\
+artifacts & artifact\_id & Type, immutable object reference, audience, risk, publication state, creator transaction, current validity. \\
+claims & claim\_id & Artifact span, text, claim type, risk, review obligation, verification and validity state. \\
+dependency\_edges & edge\_id & Claim-to-query, data, metric, schema, document, execution, feedback, or decision relation. \\
+verification\_records & verification\_id & Check type/version, inputs, result, warnings/errors, repairability, timestamp. \\
+replay\_packages & package\_id & Replay level, retained inputs, tool/model versions, parameters, hashes, environment descriptor. \\
+reviews & review\_id & Reviewer identity, decision, comment, correction scope, authority, affected claims, timestamp. \\
+audit\_events & event\_id & Append-only actor, action, target, request/transaction IDs, outcome, policy epoch, timestamp. \\
+jobs & job\_id & Schedule/trigger, idempotency key, state, retry policy, lease, next run, dead-letter reason. \\
 \bottomrule
-\end{tabularx}
-\caption{Interpretation rules prevent redefining success after results are known.}
-\end{table}
+\caption{Minimum production schema. JSON payloads may supplement but never replace indexed identity, time, policy, and state columns.}
+\end{longtable}
 
-No task-specific prompt, verifier, retrieval, or scoring changes are permitted after holdout labels are opened. Bugs discovered after unblinding are fixed only for a new independently authored confirmatory set. Local seeded results remain development evidence.
+\subsection{Memory Object Contract}
 
-\section{Research Validation Plan and Resources}
+Every memory object must contain a stable ID, source-qualified logical key, type, human-readable summary, structured payload or external reference, source, authority, effective start/end, recorded timestamp, permission labels, sensitivity, version, status, supersedes/superseded-by links, provenance reference, and content hash. Optional confidence cannot override authority.
 
-The product roadmap in Table~\ref{tab:startup-roadmap} is gated by customer and operational evidence. In parallel, the following nine-month research program tests whether the underlying systems thesis is defensible; it does not substitute for production discovery.
+Write rules are strict. Connectors may write source-observed objects within their namespace. Reviewed corrections may create reviewer-approved feedback. Only designated owners can create owner-approved definitions. Model-inferred memory starts as a hypothesis and cannot govern a high-risk task until approved. Deletion becomes revocation or tombstoning unless a retention policy requires physical erasure.
 
-\begin{table}[ht]
-\centering
-\small
-\begin{tabularx}{\linewidth}{L{0.13\linewidth}Y Y}
-\toprule
-\textbf{Month} & \textbf{Deliverable} & \textbf{Go / no-go criterion} \\
-\midrule
-0-1 & Final \atxn specification, consistency classes, threat model, and measurement harness & Every core term has an executable test oracle \\
-2-3 & Version adapters, role-complete selection, validation/commit, claim dependencies & Development races are detected; atomic evidence commit survives fault injection \\
-3-4 & Production-faithful composed baseline and matched adapters & Independent review confirms equivalent sources, models, budgets, and tools \\
-4-5 & Verifier and claim pipelines; pilot only on development data & At least 0.90 development acceptance/rejection or scope narrows before freeze \\
-5-6 & Ethics and privacy review, participant plan, frozen configuration and preregistration & No holdout labels or outputs opened before all gates pass \\
-6-8 & Independent tasks, claim corpus, human audit, red team, and systems runs & Missing executions and deviations preserved; no post-hoc tuning \\
-8-9 & Statistical analysis, artifact audit, paper, and public release & Every claim maps to immutable raw evidence and regeneration scripts \\
-\bottomrule
-\end{tabularx}
-\caption{Implementation and research schedule.}
-\end{table}
+\subsection{Indexes and Access Paths}
 
-\paragraph{People.} The minimum plan requires one primary systems implementer; at least three independent task authors/reviewers; two annotators per task or artifact plus separate adjudication; three red-teamers; one study custodian; and 36 audit-study participants. Roles may overlap only across different items without violating the independence boundary.
+The first release uses relational indexes and PostgreSQL full-text search. Required indexes include tenant/type/status, logical key/version, effective interval, permission label, source version, authority, supersession, transaction state, job lease, and reverse dependency target. Vector or hybrid retrieval is an optional candidate generator; permissions, time, authority, and supersession are always re-applied as structural filters.
 
-\paragraph{Compute and budget.} The systems study assumes one reproducible 32-core server with at least 128 GB RAM and 2 TB SSD, plus object storage for raw traces. The primary model study contains 2,700 intended executions before secondary arms; a provider and participant budget of approximately USD 10,000-20,000 is reserved and frozen before collection. Exact prices, models, retries, timeouts, and hardware are archived with results.
+\subsection{Retention and Encryption}
 
-\paragraph{Fallbacks.} If a live external product cannot be evaluated with exportable evidence, the secondary comparison uses a production-faithful self-hosted composition and is labeled accordingly. If claim extraction cannot meet recall gates, high-risk publication requires structured claim declarations. If general SQL verification fails, the supported fragment is narrowed. If C2 retention is unavailable, claims are limited to evidence reconstruction rather than computational replay. None of these fallbacks changes the H1/H2 evaluation after freeze.
+Encrypt transport and storage. Use per-environment keys initially and tenant-specific keys for enterprise isolation. Store secret references in a secret manager. Define retention independently for prompts, model responses, query results, raw evidence, artifacts, audit events, and C2 snapshots. A replay claim is allowed only when the required data remains retained for its declared interval.
 
-\section{Reproducibility, Ethics, and Artifact Plan}
+\section{Connector Architecture}
 
-The repository already contains a frozen external-evaluation schema, evidence validators, scenario contracts, and machine-readable development results. The confirmatory release will add:
-
+Each connector implements a small, testable contract:
 \begin{itemize}
-  \item immutable source revision, dependency manifests, container or environment records, and hardware description;
-  \item hashed task, annotation, model, baseline, prompt, timeout, retry, and price configurations;
-  \item anonymized holdout tasks and raw outputs where data-use agreements permit;
-  \item all failures, exclusions, protocol deviations, and missing executions;
-  \item scripts that regenerate every figure and table from raw records;
-  \item a claim-to-evidence manifest for the final paper.
+  \item \code{discover(scope)} returns source-qualified entities and capabilities;
+  \item \code{observe(ref)} returns version, effective time, freshness, sensitivity, access, and consistency class;
+  \item \code{read(ref, version, capability)} returns governed content or a bounded read handle;
+  \item \code{validate(ref, observed\_version)} confirms whether a C1 observation still holds;
+  \item \code{subscribe(cursor)} emits version, schema, permission, freshness, or deletion events;
+  \item \code{health()} reports authentication, rate limits, lag, and degraded capabilities.
 \end{itemize}
 
-Human studies begin only after ethics, consent, privacy, compensation, exclusion, and data-retention rules are approved. Participant identities remain private and separate from public pseudonymous records. Proprietary product exports and sensitive data are retained only in approved access-controlled archives; public releases contain hashed manifests and permitted redactions.
+Connector output is untrusted until normalized and policy-labeled. Source text never carries executable policy. Each connector receives least-privilege, tenant-scoped credentials and runs behind egress restrictions. Pagination, retries, backoff, rate-limit state, and source cursors are durable.
 
-\section{Expected Contributions}
+\subsection{Connector Build Order}
 
-The project is expected to contribute:
+Build one warehouse adapter first, then identity/policy, semantic definitions, catalog/schema, documents, and event/stream state. Each new adapter must ship with fixtures, contract tests, access-revocation tests, version-change tests, pagination tests, and a failure-mode table. Do not add a connector solely for breadth; add it when a paid workflow requires one of its roles.
+
+\section{Context Compiler}
+
+The context compiler turns a task schema into a permission-safe working set and an auditable manifest.
+
+\subsection{Compilation Algorithm}
 
 \begin{enumerate}
-  \item \textbf{A memory-layer abstraction:} persistent typed analytical memory, bounded active-context projections, and explicit read/write authority for continuous data analytics agents.
-  \item \textbf{A transaction protocol:} \atxn, with consistency classes, optimistic version validation, capability-scoped execution, and a publication linearization point.
-  \item \textbf{Two coupled memory mechanisms:} role-complete bounded context selection and claim-level dependency/invalidation semantics, both evaluated independently through ablations.
-  \item \textbf{A reference implementation and composed baseline:} matched enough to test whether unification adds value beyond ordinary integration.
-  \item \textbf{Independent evidence:} task, verifier, claim, human-audit, red-team, and scaling studies with preregistered failure criteria.
-  \item \textbf{A reusable artifact:} schemas and tools for measuring state-related failures in long-running analytical agents, even if the central hypothesis is rejected.
+  \item derive required and optional roles from the task type and risk policy;
+  \item query candidate indexes with tenant and permission pushdown;
+  \item remove inaccessible, revoked, expired, and superseded objects before semantic ranking;
+  \item group by source-qualified logical key and resolve aliases explicitly;
+  \item reconcile effective time and authority; surface equal-authority conflicts;
+  \item choose at least one valid object for every mandatory role;
+  \item fill remaining budget by relevance, authority, freshness, verification state, and diversity;
+  \item compact only by producing a derived object with links to every source object;
+  \item emit a context manifest containing selections, omissions, conflicts, warnings, token cost, and source versions.
 \end{enumerate}
 
-The strongest possible result is not that \amos passes its own invariants. It is that the memory layer produces a reproducible improvement over a credible composed alternative and that the improvement can be attributed to its context, transaction, and dependency mechanisms at measured cost. A null result is also informative: it would show that conventional composition is sufficient or that the proposed safety-utility tradeoff is not worthwhile.
+\subsection{Failure Behavior}
+
+Missing role coverage yields code{needs\_review} or code{reject}. Ambiguous approved metrics yield a clarification request. Conflicting owner definitions block. Insufficient token budget never silently removes policy, schema, metric, or data-state roles; it drops optional evidence first. Restricted-object counts and identifiers are not revealed to unauthorized users.
+
+\section{Agent Runtime and Tool Execution}
+
+\subsection{Typed Planning}
+
+A plan is data, not free-form prose. Each step declares purpose, required object IDs, tool, parameters schema, expected output, dependency steps, timeout, row/data limits, cost budget, retry policy, verification rules, and review obligation. The runtime validates the plan before any capability is issued.
+
+Model routing is policy-driven. A small classifier may assign task type, a coding model may propose SQL, and a reasoning model may plan an investigation. The stored plan records the exact model provider, model ID, configuration, prompt template version, input manifest, latency, token use, and response hash. Models are replaceable processors; persistent memory and safety controls are not provider-specific.
+
+\subsection{Capabilities and Workers}
+
+The runtime exchanges a plan step for a short-lived, single-purpose capability. A capability binds tenant, transaction, identity, tool, allowed source, read/write mode, resource limits, expiry, and policy epoch. Workers reject expired, mismatched, or replayed capabilities.
+
+SQL workers use source credentials unavailable to the model. They enforce read-only statements, approved schemas, statement timeouts, row/byte limits, and query tagging. Python workers run without ambient credentials or network by default, with CPU, memory, wall-time, filesystem, and package limits. Chart workers accept structured data and style specifications, not arbitrary code. Every execution writes a hash-addressed result and audit record.
+
+\subsection{Repair Loop}
+
+Repairs are bounded. The verifier may return a machine-readable reason and permitted repair class, such as rename a superseded column or add a required metric predicate. The runtime may attempt at most the policy limit, preserving every failed plan and execution. Permission, policy, or authority failures are never model-repairable.
+
+\section{Verification, Claims, and Publication}
+
+\subsection{Pre-Execution Verification}
+
+For SQL, the verifier parses an AST and checks read-only safety, approved relations and columns, metric-required filters, time semantics, groupings, joins, unsafe functions, row limits, and permission scope. It checks schema version, data freshness, snapshot/watermark state, and whether all referenced objects are in the context manifest. Unsupported constructs produce review or rejection; string matching alone is insufficient.
+
+\subsection{Post-Execution Verification}
+
+After execution, verify result shape, empty or partial outputs, freshness, numeric consistency, denominator rules, uncertainty requirements, chart-data equality, and output sensitivity. Extract policy-relevant claims from report spans, notebook cells, chart annotations, table cells, dashboard text, or application payloads.
+
+Claim types include numeric, comparison, trend, forecast, causal, and operational recommendation. Each type has a support plan. Numeric claims require query/result, data state, metric, schema, execution hash, and verification. Causal claims require evidence and remain review-gated unless a pre-approved causal design applies. Recommendations require supporting facts, policy, decision authority, and an explicit reviewer or automation rule.
+
+\subsection{Claim Dependency Graph}
+
+For claim $c$, amos records edges to computations, data versions, metrics, schemas, documents, feedback, model outputs, verification records, and review decisions:
+\begin{equation}
+  traceable(c) \not\Rightarrow correct(c) \not\Rightarrow causally\_justified(c).
+\end{equation}
+The graph proves traceability and supports change impact. Verification supports limited consistency. Causal justification remains a separate methodological judgment.
+
+\subsection{Publication Linearization Point}
+
+Immediately before commit, the runtime revalidates policy epoch and all C1 observations. If any governing state changed, it aborts, repairs, or requests review. The linearization point is the atomic database commit that stores artifact metadata, claims, dependencies, verification, replay descriptor, and audit event. Upload large blobs first under a temporary key; commit their hashes and promote them idempotently after the database transaction.
+
+\section{Feedback, Learning, and Invalidation}
+
+Human feedback is a governed state transition. A correction records author, role, authority, scope, effective interval, target artifact/claims, supporting decision, applicability conditions, and provenance. It never silently edits the old artifact. The next applicable context compilation can select the correction according to time, scope, and authority.
+
+Source events trigger reverse dependency traversal. A changed metric, schema, document, permission, or data state identifies affected claims. Each claim is rechecked against current policy and may remain valid, become stale, become revoked, require review, or schedule re-analysis. Fan-out is bounded by tenant quotas, risk priority, deduplication keys, and cooldown windows. External notifications occur only after a new commit and policy check.
+
+\subsection{Replay Levels}
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\linewidth}{C{0.08\linewidth}L{0.25\linewidth}Y}
+\toprule
+\textbf{Level} & \textbf{Promise} & \textbf{Required retention} \\
+\midrule
+0 & Disposable exploration & Audit event only; no regeneration claim. \\
+1 & Evidence reconstruction & Object versions, queries, documents, results, and review records. \\
+2 & Artifact regeneration & Level 1 plus structured artifact inputs, templates, and deterministic render configuration. \\
+3 & Computational replay & Level 2 plus C2 data, code, parameters, tool environment, and result hashes. \\
+4 & Audit package & Level 3 plus policy, identity, approvals, signed manifests, and exportable chain of custody. \\
+\bottomrule
+\end{tabularx}
+\caption{Replay language is precise; model trajectory replay is recorded when possible but is not guaranteed.}
+\end{table}
+
+\section{API and Event Contracts}
+
+The first public API is versioned under \code{/v1}. All mutating requests require an idempotency key. Every response includes request ID, transaction ID where applicable, status, warnings, and a stable error code.
+
+\begin{table}[ht]
+\centering
+\scriptsize
+\begin{tabularx}{\linewidth}{L{0.24\linewidth}L{0.19\linewidth}Y}
+\toprule
+\textbf{Endpoint} & \textbf{Purpose} & \textbf{Contract} \\
+\midrule
+POST /tasks & Admit and run or queue analysis & Request/trigger, audience, risk, budgets, required freshness; returns transaction and job IDs. \\
+GET /tasks/\{id\} & Observe lifecycle & State, current step, warnings, budgets consumed, review obligation; no hidden restricted details. \\
+POST /memory/search & Inspect governed memory & Permission-first typed results and manifest; privileged admin modes are separate. \\
+POST /memory & Create governed memory & Authority and source constrained by caller role; append-only version semantics. \\
+POST /verify/sql & Preflight proposed SQL & Structured pass/warning/reject, rule IDs, repairability, referenced versions. \\
+GET /artifacts/\{id\} & Retrieve artifact metadata & Publication/validity state, audience, evidence links, replay level. \\
+GET /claims/\{id\} & Inspect a claim & Exact span, type, support edges, verification, review, current validity. \\
+POST /reviews & Approve, reject, or correct & Reviewer identity, scoped decision, affected claims, feedback object created. \\
+POST /replay/\{id\} & Reconstruct or replay & Allowed level, retained inputs, status, differences, new audit record. \\
+POST /artifacts/\{id\}/revalidate & Check current validity & Traverses dependencies and returns per-claim changes. \\
+\bottomrule
+\end{tabularx}
+\caption{Minimum API surface. Administrative configuration and connector secrets use separate privileged interfaces.}
+\end{table}
+
+Events use an envelope containing event ID, type, schema version, tenant, source, subject, occurred/observed times, correlation and transaction IDs, payload hash, and trace context. Consumers are idempotent. Required events include source.version.changed, policy.epoch.changed, permission.revoked, task.state.changed, artifact.committed, claim.invalidated, review.completed, and job.dead\_lettered.
+
+\section{Security and Multi-Tenancy}
+
+\subsection{Trust Boundaries}
+
+Retrieved content, model output, user-provided text, and external tool output are untrusted. Identity tokens, policy decisions, capabilities, source credentials, verification rules, commit logic, and audit events remain outside model text. A successful prompt injection may influence a proposed plan; it must not grant a capability, reveal filtered data, write high-authority memory, or publish restricted output.
+
+\begin{table}[ht]
+\centering
+\scriptsize
+\begin{tabularx}{\linewidth}{L{0.22\linewidth}Y Y}
+\toprule
+\textbf{Threat} & \textbf{Preventive control} & \textbf{Detection/recovery} \\
+\midrule
+Cross-tenant leakage & Tenant key on every row, database row-level security, tenant-scoped indexes/keys/caches. & Canary records, access-log analytics, immediate key and token revocation. \\
+Indirect prompt injection & Evidence/policy separation, capability checks, sandboxed tools, output validation. & Malicious-content flags, plan diffs, red-team corpus, quarantine. \\
+Permission-revocation race & Policy epoch and permission revalidation at commit. & Abort commit, invalidate affected claims, audit event. \\
+Memory poisoning & Authority tiers, source namespaces, review gates, immutable versions. & Conflict alerts, provenance inspection, rollback by supersession. \\
+Credential exposure & Secret manager, worker-side credential exchange, no secrets in prompts/logs. & Automated scanning, short TTL, rotation and incident runbook. \\
+Unsafe SQL or code & AST checks, read-only roles, isolated workers, network/resource limits. & Kill switch, query tags, execution audit, dead-letter evidence. \\
+Provenance leakage & Permissioned graph traversal and redacted support views. & Link-access tests, export review, access anomaly alerts. \\
+Denial of service & Admission quotas, budgets, concurrency limits, fan-out controls, circuit breakers. & Queue depth/latency alerts, tenant isolation, graceful degradation. \\
+\bottomrule
+\end{tabularx}
+\caption{Security is enforced by external controls, not by asking the model to follow policy.}
+\end{table}
+
+\subsection{Tenant Isolation}
+
+Start with shared application instances and a shared PostgreSQL cluster using row-level security, tenant-prefixed object keys, tenant-scoped encryption contexts, separate cache namespaces, and per-tenant quotas. Offer dedicated databases, worker pools, and customer-managed keys when required. Every background job restores tenant context explicitly; missing tenant context is a hard failure.
+
+\subsection{Privacy and Governance}
+
+Minimize retained raw rows. Support field classification, masking, purpose limitation, regional storage, retention, legal hold, export, and erasure. Erasure must update both primary records and derived artifacts while retaining only the minimum audit proof permitted by policy. High-risk model providers receive only the bounded, redacted context allowed by tenant configuration.
+
+\section{Deployment and Scalability Architecture}
+
+\subsection{Initial Production Topology}
+
+Deploy the modular monolith as stateless API/runtime replicas behind a load balancer. Use managed PostgreSQL with point-in-time recovery, object storage with versioning, a managed queue, isolated worker pools, secret manager, identity provider, metrics/logs/traces backend, and a private network path to customer sources. Separate development, staging, and production accounts. Infrastructure is declarative and reviewed.
+
+Run interactive and scheduled workloads in separate queues. Partition workers by tool type and risk. Use transaction IDs and idempotency keys across retries. Database transactions own state transitions; queue acknowledgements occur only after durable state is written. Long operations renew leases and checkpoints.
+
+\subsection{When to Extract Services}
+
+Do not distribute the system prematurely. Extract a component only when one of these conditions is measured: tool workers require a stronger isolation boundary; connector traffic has independent scaling; context indexes exceed primary-database capacity; invalidation fan-out interferes with interactive latency; enterprise deployment requires separate data planes; or team ownership demands an independent release cycle. Preserve the same typed contracts when extracting.
+
+\subsection{Scaling Strategy}
+
+Scale persistent memory and model context independently. Keep structured filters in the database, move large blobs to object storage, and introduce a dedicated lexical/vector candidate index behind the memory interface when needed. Shard by tenant before sharding within a tenant. Maintain reverse dependency indexes for invalidation. Cache only version-addressed, permission-scoped results; policy-epoch changes evict them.
+
+Capacity planning tracks active tenants, memory objects, version rate, dependency edges, scheduled tasks, tool concurrency, result bytes, model tokens, p50/p95/p99 control-path latency, queue age, and invalidation fan-out. Load tests include one-million-object tenants, policy churn, source delay, and noisy neighbors.
+
+\section{Operations, Reliability, and Support}
+
+\subsection{Service Objectives}
+
+Initial paid-pilot objectives are 99.5\% API availability, 99\% successful scheduled runs excluding declared source outages, p95 admission/context compilation below two seconds at the supported scale, zero confirmed cross-tenant or permission leaks, and 100\% of final artifacts with complete claim/evidence manifests. Objectives tighten only after error budgets and workload shape are understood.
+
+\subsection{Observability}
+
+Every request carries request, transaction, tenant, job, plan, execution, artifact, and trace IDs. Metrics cover task outcomes, verifier results by rule, context role coverage, retrieval leaks, repair counts, review backlog, capability denials, query cost, model cost, queue age, source health, invalidation lag, replay success, and storage growth. Logs are structured, redacted, immutable according to policy, and linked to traces. Customer-visible status distinguishes AMOS failure from source or provider failure.
+
+\subsection{Runbooks}
+
+Ship runbooks for source authentication failure, permission leak suspicion, policy epoch mismatch, stuck transaction, worker compromise, runaway query, queue backlog, database failover, object-store mismatch, invalidation storm, replay mismatch, model-provider outage, and data erasure. Each runbook specifies trigger, containment, customer impact, evidence preservation, recovery, owner, and post-incident tests.
+
+Backups are restored in staging on a schedule. Target RPO is five minutes and RTO is one hour for the control plane during paid pilot, with a longer declared window for reconstructible artifacts. Disaster-recovery drills verify database, object, queue, key, and connector configuration recovery together.
+
+\section{Testing and Quality Gates}
+
+Testing mirrors the architecture rather than only happy-path answers.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\linewidth}{L{0.20\linewidth}Y Y}
+\toprule
+\textbf{Layer} & \textbf{Required tests} & \textbf{Release gate} \\
+\midrule
+Unit/property & Time intervals, authority ordering, supersession, policy evaluation, state transitions, hash stability. & Deterministic and exhaustive boundary cases; mutation/property tests for core invariants. \\
+Connector contract & Versions, revocation, pagination, retry, cursor recovery, access denial, rate limit, source deletion. & Same suite passes every connector; no adapter-specific bypass. \\
+Context compiler & Role completeness, permission-first filtering, conflicts, ambiguity, budget pressure, compaction lineage. & Zero restricted/superseded selections; mandatory roles never silently dropped. \\
+Verifier & Valid/invalid SQL corpus, metrics, schema drift, freshness, unsafe functions, claim support. & Published precision/recall thresholds and zero acceptance of seeded critical violations. \\
+End to end & Request, schedule, review, feedback, replay, invalidation, abort/retry, artifact export. & Every terminal outcome and recovery path exercised with persisted evidence. \\
+Security & Cross-tenant, prompt injection, poisoning, capability replay, secret leakage, provenance inference, DoS. & Zero critical leaks; red-team findings have regression tests. \\
+Reliability & Worker kill, database failover, duplicate events, lost acknowledgement, source timeout, model outage. & No duplicate publication; idempotent recovery preserves audit trail. \\
+Performance & Memory/edge growth, concurrency, churn, fan-out, noisy neighbor, queue saturation. & SLOs hold at declared paid-pilot limits with recorded capacity margin. \\
+Human review & Evidence usability, defect detection, correction scope, audit time. & Reviewers can locate support and submit bounded corrections without engineer help. \\
+\bottomrule
+\end{tabularx}
+\caption{A release is not qualified because a demo answer looks correct; each control boundary must pass its own oracle.}
+\end{table}
+
+\subsection{Definition of Done for a Feature}
+
+A feature is done only when its typed contract, migration, permissions, audit events, metrics, failure modes, idempotency behavior, retention behavior, tests, operator runbook, and user-facing status are implemented. Model prompt changes alone do not constitute a product feature.
+
+\section{Step-by-Step Build Plan}\label{sec:build-plan}
+
+The team advances by exit gates, not calendar optimism.
+
+\begin{longtable}{L{0.08\linewidth}L{0.15\linewidth}L{0.32\linewidth}L{0.31\linewidth}}
+\toprule
+\textbf{Phase} & \textbf{Product state} & \textbf{Build} & \textbf{Exit gate} \\
+\midrule
+\endhead
+0 & Architecture foundation & Domain types, migrations, transaction state machine, audit log, tenant/identity skeleton, CI, local fixtures, one-command environment. & All invariants have executable tests; a failed step is inspectable and idempotently retryable. \\
+1 & Governed memory & Memory/version schema, authority/time/supersession, PostgreSQL search, permission policy, seed tooling, admin inspection. & Permission, time, authority, and supersession property tests pass; no destructive update path. \\
+2 & One connector and context & Warehouse adapter, source version observation, role schema, context compiler, manifest, access pushdown, ambiguity handling. & Frozen customer task set always includes required roles; zero restricted or superseded retrievals. \\
+3 & Governed answer & Typed planner, SQL worker, AST verifier, metric/schema/freshness checks, result hashes, cited report, task API. & At least 90\% safe-and-correct completion on frozen pilot tasks; every numeric claim resolves to evidence. \\
+4 & Persistent analyst & Review UI/API, scoped feedback, claim graph, replay levels 1--2, schedules, source-change invalidation, notifications. & Four weekly shadow cycles complete; corrections affect the next applicable run; stale claims are identified correctly. \\
+5 & Paid pilot & SSO/RBAC, multi-tenant isolation, object storage, durable queues, observability, backups, runbooks, quotas, usage metering. & Three design partners; zero critical security findings; recovery drill passes; onboarding under ten business days. \\
+6 & Platform API & Stable SDK, connector kit, application templates, model routing, admin controls, retention/erasure, exportable audit packages. & Two independent applications use the same memory/runtime without bespoke core changes. \\
+7 & Scale and enterprise & Hybrid indexes, worker/service extraction where measured, dedicated tenancy options, regional deployment, customer-managed keys. & SLOs pass at target tenant/edge/concurrency scale; noisy-neighbor and failover tests pass. \\
+8 & Controlled autonomy & Policy-scoped auto-publication, dependency-driven re-analysis, portfolio scheduling, advanced statistics, rollback controls. & Each autonomous task class has a separate safety case, customer approval, monitoring, kill switch, and rollback drill. \\
+\bottomrule
+\caption{Implementation sequence from empty repository to controlled autonomy.}
+\end{longtable}
+
+\subsection{Reference Repository Shape}
+
+Preserve architectural boundaries in code before extracting network services. A practical modular-monolith layout is:
+
+\small
+\begin{verbatim}
+apps/api/                 admission, public API, event streaming
+apps/web/                 Memory Studio, workspace, review, operations
+amos/domain/              IDs, value objects, states, errors, interfaces
+amos/memory/              objects, versions, authority, time, indexes
+amos/connectors/          connector SDK and source adapters
+amos/context/             role schemas, selection, reconciliation, manifests
+amos/runtime/             planner, controller, budgets, checkpoints, repair
+amos/workers/             isolated SQL, Python, statistics, chart workers
+amos/verification/        policy, SQL, result, claim, publication checks
+amos/evidence/            claims, dependencies, artifacts, replay packages
+amos/scheduler/           jobs, leases, retries, invalidation, revalidation
+amos/policy/              identity, authorization, risk and retention rules
+infra/migrations/         forward database migrations and data backfills
+deploy/                   local, staging, production and recovery definitions
+tests/                    unit, contract, integration, security, E2E, load
+\end{verbatim}
+\normalsize
+
+\begin{samepage}
+Dependencies point inward to \texttt{amos/domain}; domain code imports no framework, database driver, model SDK, or connector. Packages call another package through a typed interface and may not write its tables. Transactional state change and an outbox event commit together before asynchronous work begins. External adapters implement ports owned by the calling domain. Architecture tests enforce allowed imports, table ownership, tenant-scoped repositories, and the absence of credentials from model-facing packages.
+\end{samepage}
+
+\subsection{First Vertical Slice}
+
+Use a payment-health or subscription-health review as the first commercial workflow. It is recurring, economically meaningful, bounded, and reviewable. Limit the alpha to one metric family, one warehouse, three query shapes, one chart, one report template, and one reviewer role. Shadow the existing analyst process before replacing any deliverable.
+
+The vertical slice is complete when a user request or schedule produces: admitted transaction; versioned context manifest; verified SQL executions; result and chart hashes; structured claims; review-aware report; claim dependencies; replay package; audit trail; and explicit terminal outcome. A fluent report without these records is not an AMOS product slice.
+
+\subsection{Team and Ownership}
+
+A five-person initial team is sufficient: founding architect/product lead; memory/connectors engineer; runtime/tools engineer; product/review engineer; and design-partner/data lead. Assign one named owner for security and operations even if the role is fractional. Every architectural component in Table 3 has a code owner and operational owner before paid pilot.
+
+\section{Current Prototype to Production}
+
+The repository already demonstrates useful seams: Python domain models, SQLite-backed memory, permission filtering, temporal/authority reconciliation, a planner/controller, DuckDB execution, SQL verification, claim provenance, replay, FastAPI routes, scenarios, and an 85-test regression suite. This proves the vertical control loop can run. It is not yet the complete production architecture.
+
+\begin{table}[ht]
+\centering
+\scriptsize
+\begin{tabularx}{\linewidth}{L{0.22\linewidth}Y Y}
+\toprule
+\textbf{Area} & \textbf{Prototype} & \textbf{Production completion work} \\
+\midrule
+State store & SQLite tables and local artifacts. & PostgreSQL migrations, row-level security, HA, PITR, object storage, retention, tenant keys. \\
+Transactions & Controller sequence and audit records. & Explicit atxn state machine, policy/source revalidation, leases, idempotency, atomic evidence commit. \\
+Connectors & Synthetic DuckDB and fixture-shaped adapters. & Versioned connector SDK, real warehouse/IAM/semantic/document adapters, change subscriptions. \\
+Runtime & One payment workflow and templated plan. & Typed multi-step plans, model router, durable checkpoints, capabilities, isolated workers, repair budgets. \\
+Verification & Read-only SQL, schema, metric, freshness, permissions, provenance. & Supported SQL fragment spec, result/statistical checks, rule versioning, claim-type policies, false-reject monitoring. \\
+Provenance & Claim records, support links, replay hashes. & General dependency graph, artifact spans, review decisions, reverse invalidation, signed audit export. \\
+API & FastAPI task/memory/claim/artifact/replay routes. & Versioning, idempotency, pagination, quotas, stable error taxonomy, event schemas, SDK. \\
+Operations & Local execution and evaluation harness. & Queue, observability, SLOs, on-call, backups, DR, metering, customer status, incident runbooks. \\
+Security & Permission filters and read-only tools. & SSO/RBAC, tenant isolation, secret manager, worker sandbox, egress controls, red-team program. \\
+\bottomrule
+\end{tabularx}
+\caption{The production plan extends the existing prototype without confusing local feasibility with a deployable product.}
+\end{table}
+
+\section{Architecture Decisions and Non-Goals}
+
+Key decisions are explicit:
+\begin{itemize}
+  \item build a modular monolith first, with internal service contracts and one authoritative transaction database;
+  \item keep raw data in source systems and move bounded results or retained snapshots only under policy;
+  \item enforce permissions before retrieval ranking and again at execution and commit;
+  \item treat models as untrusted, replaceable processors with no ambient credentials;
+  \item use optimistic cross-source validation rather than claim nonexistent global ACID guarantees;
+  \item attach provenance at claim granularity and define replay levels precisely;
+  \item gate causal and high-impact conclusions on human or approved methodological review;
+  \item add autonomy per task class, never as a platform-wide switch.
+\end{itemize}
+
+Non-goals for the first product are universal enterprise knowledge management, unrestricted natural-language access to all data, arbitrary production writes, perfect model reproducibility, automatic causal discovery, and replacing warehouses, semantic layers, catalogs, lineage systems, or BI tools.
+
+\section{Harsh Qualification Checklist}
+
+Before claiming that AMOS is ready for a paid pilot, answer yes to every item:
+\begin{enumerate}
+  \item Can an operator reconstruct why every selected memory object entered the context and why every omitted mandatory role caused a visible outcome?
+  \item Can permission revocation between retrieval and publication prevent commit without relying on the model?
+  \item Can every numeric statement in a final artifact resolve to query, result hash, data version, metric, schema, and verification?
+  \item Can a reviewer correction affect the next applicable task while the original artifact remains immutable?
+  \item Can a metric or schema change identify and reclassify every dependent claim?
+  \item Can duplicate requests, events, or retries occur without duplicate publication?
+  \item Can a worker be killed or compromised without exposing long-lived credentials or corrupting transaction history?
+  \item Can the team restore database, objects, queue state, keys, and connector configuration within the declared RTO?
+  \item Can a tenant export its audit package and enforce retention or erasure without another tenant being observable?
+  \item Can model provider, retrieval backend, or worker implementation change without changing the memory and atxn contracts?
+  \item Do load, security, connector, failure-injection, and human-review tests pass at the declared supported scale?
+  \item Does the product save measurable analyst/reviewer time while maintaining zero confirmed critical permission leaks?
+\end{enumerate}
+
+A no answer is an architectural gap, not documentation debt. The corresponding phase remains incomplete until the gap has an owner, contract, test, metric, and runbook.
 
 \section{Conclusion}
 
-\amos is designed to become the persistent analytical intelligence of a company: an operating layer in company memory that understands its data, metrics, ontology, policies, history, authority, decisions, and preferred ways of communicating, then continuously performs the complete work of data analysis. Teams and external developers build analytical applications on that shared substrate. Conversational querying is one such application, and a model such as Google Gemma 4 is one replaceable processor; neither defines the product boundary.
+\amos becomes a product when persistent company knowledge, model reasoning, tool execution, verification, human judgment, and artifacts are joined by one enforceable operating contract. Typed analytical memory provides durable state. The bounded context compiler supplies only valid and permitted working memory. atxn makes admission, version observation, capabilities, validation, commit, replay, and invalidation explicit. Claim dependencies make conclusions inspectable and change-aware. External enforcement keeps models useful without making them trusted authorities.
 
-The research program deliberately narrows this broad product vision to a falsifiable systems question. \amos keeps persistent typed analytical state outside the model, constructs bounded governed context for each task, and preserves corrections and evidence across tasks. \atxn makes the layer enforceable through version vectors, role-complete context selection, scoped capabilities, optimistic commit validation, and claim dependencies.
-
-The research program is designed to reject the idea if it does not outperform a production-faithful composed stack, if its verifier rejects valid work, if its audit interface does not help reviewers, if its security boundary leaks, or if its overhead overwhelms the benefit. That combination of mechanism, comparison, and failure criteria is the basis on which \amos should be judged as systems research.
-
-\begin{thebibliography}{99}
-
-\bibitem{memgpt}
-Charles Packer, Vivian Fang, Shishir G. Patil, Kevin Lin, Sarah Wooders, and Joseph E. Gonzalez.
-\newblock MemGPT: Towards LLMs as operating systems.
-\newblock \emph{arXiv preprint arXiv:2310.08560}, 2023.
-
-\bibitem{rag}
-Patrick Lewis et al.
-\newblock Retrieval-augmented generation for knowledge-intensive NLP tasks.
-\newblock \emph{Advances in Neural Information Processing Systems}, 2020.
-
-\bibitem{lostinthemiddle}
-Nelson F. Liu et al.
-\newblock Lost in the middle: How language models use long contexts.
-\newblock \emph{Transactions of the Association for Computational Linguistics}, 2024.
-
-\bibitem{react}
-Shunyu Yao et al.
-\newblock ReAct: Synergizing reasoning and acting in language models.
-\newblock \emph{International Conference on Learning Representations}, 2023.
-
-\bibitem{toolformer}
-Timo Schick et al.
-\newblock Toolformer: Language models can teach themselves to use tools.
-\newblock \emph{arXiv preprint arXiv:2302.04761}, 2023.
-
-\bibitem{spider}
-Tao Yu et al.
-\newblock Spider: A large-scale human-labeled dataset for complex and cross-domain semantic parsing and text-to-SQL.
-\newblock \emph{Proceedings of EMNLP}, 2018.
-
-\bibitem{bird}
-Jinyang Li et al.
-\newblock Can LLM already serve as a database interface? A BIg Bench for large-scale database grounded text-to-SQLs.
-\newblock \emph{arXiv preprint arXiv:2305.03111}, 2023.
-
-\bibitem{spider2}
-Fangyu Lei et al.
-\newblock Spider 2.0: Evaluating language models on real-world enterprise text-to-SQL workflows.
-\newblock \emph{International Conference on Learning Representations}, 2025.
-
-\bibitem{millwheel}
-Tyler Akidau et al.
-\newblock MillWheel: Fault-tolerant stream processing at internet scale.
-\newblock \emph{Proceedings of the VLDB Endowment}, 2013.
-
-\bibitem{dataflow}
-Tyler Akidau et al.
-\newblock The Dataflow model: A practical approach to balancing correctness, latency, and cost in massive-scale, unbounded, out-of-order data processing.
-\newblock \emph{Proceedings of the VLDB Endowment}, 2015.
-
-\bibitem{flink}
-Paris Carbone, Asterios Katsifodimos, Stephan Ewen, Volker Markl, Seif Haridi, and Kostas Tzoumas.
-\newblock Apache Flink: Stream and batch processing in a single engine.
-\newblock \emph{IEEE Data Engineering Bulletin}, 2015.
-
-\bibitem{deltalake}
-Michael Armbrust et al.
-\newblock Delta Lake: High-performance ACID table storage over cloud object stores.
-\newblock \emph{Proceedings of the VLDB Endowment}, 2020.
-
-\bibitem{provdm}
-Luc Moreau and Paolo Missier, editors.
-\newblock PROV-DM: The PROV data model.
-\newblock W3C Recommendation, 2013.
-
-\bibitem{openlineage}
-OpenLineage Project.
-\newblock OpenLineage: An open standard for lineage metadata collection.
-\newblock \url{https://openlineage.io/}, accessed 2026.
-
-\bibitem{deequ}
-Sebastian Schelter et al.
-\newblock Unit testing data with Deequ.
-\newblock \emph{Proceedings of SIGMOD}, 2019.
-
-\bibitem{tfdv}
-Eric Caveness et al.
-\newblock TensorFlow Data Validation: Data analysis and validation in continuous ML pipelines.
-\newblock \emph{Proceedings of SIGMOD}, 2020.
-
-\bibitem{greshake2023indirect}
-Kai Greshake, Sahar Abdelnabi, Shailesh Mishra, Christoph Endres, Thorsten Holz, and Mario Fritz.
-\newblock Not what you've signed up for: Compromising real-world LLM-integrated applications with indirect prompt injection.
-\newblock \emph{arXiv preprint arXiv:2302.12173}, 2023.
-
-\bibitem{yi2023bipia}
-Jingwei Yi, Yueqi Xie, Bin Zhu, Emre Kiciman, Guangzhong Sun, Xing Xie, and Fangzhao Wu.
-\newblock Benchmarking and defending against indirect prompt injection attacks on large language models.
-\newblock \emph{arXiv preprint arXiv:2312.14197}, 2023.
-
-\bibitem{generativeagents}
-Joon Sung Park et al.
-\newblock Generative agents: Interactive simulacra of human behavior.
-\newblock \emph{Proceedings of the ACM Symposium on User Interface Software and Technology}, 2023.
-
-\bibitem{reflexion}
-Noah Shinn, Federico Cassano, Ashwin Gopinath, Karthik Narasimhan, and Shunyu Yao.
-\newblock Reflexion: Language agents with verbal reinforcement learning.
-\newblock \emph{Advances in Neural Information Processing Systems}, 2023.
-
-\bibitem{noworkflow}
-Leonardo Murta, Vanessa Braganholo, Fernando Chirigati, David Koop, and Juliana Freire.
-\newblock noWorkflow: Capturing and analyzing provenance of scripts.
-\newblock \emph{Provenance and Annotation of Data and Processes}, 2014.
-
-\bibitem{yesworkflow}
-Timothy McPhillips et al.
-\newblock YesWorkflow: A user-oriented, language-independent tool for recovering workflow information from scripts.
-\newblock \emph{International Journal of Digital Curation}, 10(1):298--313, 2015.
-
-\end{thebibliography}
+The implementation path is deliberately practical: build one governed read-only workflow in a modular monolith; make every outcome and dependency observable; add durable review, scheduling, tenancy, operations, and connector breadth; then introduce platform APIs and autonomy only when phase-specific gates pass. If the team follows the contracts and qualification checklist in this guide, it can build AMOS end to end without leaving the hardest correctness, security, and operational decisions implicit.
 
 \end{document}
