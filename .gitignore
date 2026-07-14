@@ -16,6 +16,9 @@ htmlcov/
 .venv/
 venv/
 
+# Rust
+/target/
+
 # Secrets and local configuration
 .env
 .env.*
@@ -26,6 +29,7 @@ data/**/*.sqlite
 data/**/*.sqlite-*
 data/**/*.duckdb
 data/**/*.duckdb.wal
+data/**/*.db
 
 # LaTeX and document build products. Only the two canonical papers are retained.
 *.aux
