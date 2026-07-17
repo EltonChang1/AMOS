@@ -5,7 +5,7 @@ AMOS is a Rust-native operating layer between analytical agents and governed dat
 This repository implements the complete first production slice defined by the accompanying papers: one tenant, one read-only warehouse connector, the payment-failure metric family, deterministic statistics and charting, governed documents, typed report claims, reviewer approval or correction, dependency invalidation, and computational replay.
 
 - [Research paper](papers/AMOS_research_paper.pdf): the memory-operating abstraction, core primitives, reference scenario, and evaluation.
-- [Design proposal](papers/AMOS_design_proposal.pdf): the product architecture and normative Specifications A–F.
+- [Build guide](papers/AMOS_design_proposal.pdf): the first production slice, cut list, build gates, and normative Specifications A–F.
 - [Rust requirements matrix](docs/RUST_REQUIREMENTS_MATRIX.md): direct traceability from both papers to implementation modules.
 
 ## What the MVP provides
@@ -96,6 +96,6 @@ The Rust regression suite exercises the state machine, source-version immutabili
 
 ## MVP boundary
 
-The design proposal explicitly defers general Python execution, arbitrary production writes, unrestricted notebook code, general multi-agent scheduling, unreviewed causal claims, and autonomous external communication; they are intentionally absent. Production PostgreSQL/RLS, object storage, KMS or secret management, SSO, and customer-specific warehouse connectors are deployment adapters that require real infrastructure and credentials, not alternate application logic.
+The build guide explicitly defers general Python execution, arbitrary production writes, unrestricted notebook code, general multi-agent scheduling, unreviewed causal claims, and autonomous external communication; they are intentionally absent until named expansion gates pass. Production PostgreSQL/RLS, object storage, KMS or secret management, SSO, and customer-specific warehouse connectors are deployment adapters that require real infrastructure and credentials, not alternate application logic.
 
 Frozen paper artifacts, evaluation JSON, and scenario fixtures remain in the repository as research evidence; no legacy Python or JavaScript application code remains.
