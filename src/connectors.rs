@@ -71,6 +71,7 @@ pub struct SqliteWarehouseConnector {
     path: PathBuf,
     permissions: BTreeSet<String>,
     events: Arc<Mutex<VecDeque<SourceEvent>>>,
+    page_size: usize,
 }
 
 impl SqliteWarehouseConnector {
@@ -85,7 +86,13 @@ impl SqliteWarehouseConnector {
             path: path.as_ref().to_path_buf(),
             permissions: BTreeSet::from(["analytics".into(), "payments".into()]),
             events: Arc::new(Mutex::new(VecDeque::new())),
+            page_size: 50,
         }
+    }
+
+    pub fn with_page_size(mut self, page_size: usize) -> Self {
+        self.page_size = page_size.max(1);
+        self
     }
 
     pub fn path(&self) -> &Path {
@@ -124,20 +131,62 @@ impl SqliteWarehouseConnector {
         Ok(event)
     }
 
+    fn open_connection(&self) -> Result<Connection> {
+        if !self.path.exists() {
+            return Err(AmosError::Connector(
+                "warehouse source unavailable: database file missing".into(),
+            ));
+        }
+        Connection::open(&self.path)
+            .map_err(|error| AmosError::Connector(format!("warehouse source unavailable: {error}")))
+    }
+
     fn schema_snapshot(&self, reference: &str) -> Result<Value> {
-        let connection = Connection::open(&self.path)
-            .map_err(|error| AmosError::Connector(error.to_string()))?;
+        let connection = self.open_connection()?;
         let table = reference.strip_prefix("table:").unwrap_or(reference);
+        let exists: bool = connection
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(|error| AmosError::Connector(error.to_string()))?;
+        if !exists {
+            return Err(AmosError::NotFound(format!(
+                "table {table} deleted or unavailable"
+            )));
+        }
         let mut statement = connection.prepare(&format!(
             "PRAGMA table_info('{}')",
             table.replace('\'', "''")
         ))?;
-        let columns = statement.query_map([], |row| Ok(json!({"name":row.get::<_,String>(1)?,"type":row.get::<_,String>(2)?,"not_null":row.get::<_,bool>(3)?})))?
-            .collect::<std::result::Result<Vec<_>,_>>()?;
+        let columns = statement
+            .query_map([], |row| {
+                Ok(json!({
+                    "name": row.get::<_, String>(1)?,
+                    "type": row.get::<_, String>(2)?,
+                    "not_null": row.get::<_, bool>(3)?
+                }))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         if columns.is_empty() {
             return Err(AmosError::NotFound(format!("table {table}")));
         }
-        Ok(json!({"table":table,"columns":columns}))
+        Ok(json!({"table": table, "columns": columns}))
+    }
+
+    fn list_tables(&self, scope: &str) -> Result<Vec<String>> {
+        let connection = self.open_connection()?;
+        let mut statement = connection.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )?;
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(names
+            .into_iter()
+            .filter(|name| scope == "*" || name.contains(scope))
+            .collect())
     }
 }
 
@@ -148,29 +197,34 @@ impl Connector for SqliteWarehouseConnector {
     }
 
     async fn discover(&self, scope: &str, cursor: Option<&str>) -> Result<Page<EntityRef>> {
-        if cursor.is_some() {
-            return Ok(Page {
-                items: vec![],
-                next_cursor: None,
-            });
+        let names = self.list_tables(scope)?;
+        let start = cursor
+            .and_then(|value| {
+                names
+                    .iter()
+                    .position(|name| name == value)
+                    .map(|idx| idx + 1)
+            })
+            .unwrap_or(0);
+        if cursor.is_some() && start == 0 {
+            return Err(AmosError::Validation(format!(
+                "discover cursor '{}' is unknown for scope '{scope}'",
+                cursor.unwrap_or_default()
+            )));
         }
-        let connection = Connection::open(&self.path)
-            .map_err(|error| AmosError::Connector(error.to_string()))?;
-        let mut statement = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?;
-        let names = statement
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let end = (start + self.page_size).min(names.len());
+        let page_names = &names[start..end];
+        let next_cursor = (end < names.len()).then(|| names[end - 1].clone());
         Ok(Page {
-            items: names
-                .into_iter()
-                .filter(|name| scope == "*" || name.contains(scope))
+            items: page_names
+                .iter()
                 .map(|name| EntityRef {
                     source_id: self.source_id.clone(),
                     reference: format!("table:{name}"),
                     entity_type: "relation".into(),
                 })
                 .collect(),
-            next_cursor: None,
+            next_cursor,
         })
     }
 
@@ -220,12 +274,24 @@ impl Connector for SqliteWarehouseConnector {
     }
 
     async fn validate(&self, reference: &str, observed_version: &str) -> Result<Validation> {
-        let current = content_hash(&self.schema_snapshot(reference)?);
-        Ok(Validation {
-            same: current == observed_version,
-            current_version: Some(current),
-            reason: None,
-        })
+        match self.schema_snapshot(reference) {
+            Ok(snapshot) => {
+                let current = content_hash(&snapshot);
+                let same = current == observed_version;
+                Ok(Validation {
+                    same,
+                    current_version: Some(current),
+                    reason: (!same).then(|| "source version diverged".into()),
+                })
+            }
+            Err(AmosError::NotFound(reason)) => Ok(Validation {
+                same: false,
+                current_version: None,
+                reason: Some(reason),
+            }),
+            Err(AmosError::Connector(reason)) => Err(AmosError::Connector(reason)),
+            Err(other) => Err(other),
+        }
     }
 
     async fn subscribe(&self, cursor: Option<&str>) -> Result<Page<SourceEvent>> {
@@ -234,6 +300,11 @@ impl Connector for SqliteWarehouseConnector {
             .lock()
             .map_err(|_| AmosError::Connector("event queue lock poisoned".into()))?;
         let items: Vec<SourceEvent> = if let Some(cursor) = cursor {
+            if !events.iter().any(|event| event.cursor == cursor) {
+                return Err(AmosError::Validation(format!(
+                    "subscribe cursor '{cursor}' is unknown"
+                )));
+            }
             events
                 .iter()
                 .skip_while(|event| event.cursor != cursor)
@@ -248,10 +319,7 @@ impl Connector for SqliteWarehouseConnector {
     }
 
     async fn health(&self) -> Result<ConnectorHealth> {
-        if !self.path.is_file() {
-            return Err(AmosError::Connector("warehouse file is unavailable".into()));
-        }
-        Connection::open(&self.path).map_err(|error| AmosError::Connector(error.to_string()))?;
+        self.open_connection()?;
         Ok(ConnectorHealth {
             source_id: self.source_id.clone(),
             status: "healthy".into(),
@@ -265,16 +333,51 @@ impl Connector for SqliteWarehouseConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
+    use crate::domain::{CapabilityClaims, CapabilityLimits};
+    use tempfile::{NamedTempFile, TempDir};
+
+    fn seed_tables(path: &Path, names: &[&str]) {
+        let connection = Connection::open(path).unwrap();
+        for name in names {
+            connection
+                .execute(&format!("CREATE TABLE {name}(id TEXT)"), [])
+                .unwrap();
+        }
+    }
+
+    fn capability(tenant: &str, source: &str) -> CapabilityEnvelope {
+        CapabilityEnvelope {
+            signature: "test".into(),
+            claims: CapabilityClaims {
+                issuer: "amos-runtime".into(),
+                audience: "sql-worker".into(),
+                tenant_id: tenant.into(),
+                atxn_id: "atxn".into(),
+                plan_id: "plan".into(),
+                step_id: "step".into(),
+                subject_id: "user".into(),
+                tool: "sql.readonly.v1".into(),
+                source_id: source.into(),
+                operations: BTreeSet::from(["query".into()]),
+                relations: BTreeSet::new(),
+                limits: CapabilityLimits {
+                    seconds: 30,
+                    rows: 100,
+                    bytes: 1_000,
+                },
+                policy_epoch: 1,
+                fencing_token: 1,
+                token_id: "cap".into(),
+                not_before: 0,
+                expires_at: i64::MAX,
+            },
+        }
+    }
 
     #[tokio::test]
     async fn connector_has_stable_version_and_detects_change() {
         let file = NamedTempFile::new().unwrap();
-        let connection = Connection::open(file.path()).unwrap();
-        connection
-            .execute("CREATE TABLE payments(id TEXT)", [])
-            .unwrap();
-        drop(connection);
+        seed_tables(file.path(), &["payments"]);
         let connector = SqliteWarehouseConnector::new("t", "warehouse", file.path());
         let first = connector.observe("table:payments").await.unwrap();
         let second = connector.observe("table:payments").await.unwrap();
@@ -289,6 +392,110 @@ mod tests {
                 .await
                 .unwrap()
                 .same
+        );
+    }
+
+    #[tokio::test]
+    async fn connector_detects_deletion_and_source_unavailable() {
+        let file = NamedTempFile::new().unwrap();
+        seed_tables(file.path(), &["payments"]);
+        let connector = SqliteWarehouseConnector::new("t", "warehouse", file.path());
+        let observed = connector.observe("table:payments").await.unwrap();
+        Connection::open(file.path())
+            .unwrap()
+            .execute("DROP TABLE payments", [])
+            .unwrap();
+        let validation = connector
+            .validate("table:payments", &observed.source_version)
+            .await
+            .unwrap();
+        assert!(!validation.same);
+        assert!(validation.current_version.is_none());
+        assert!(
+            validation
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("deleted"))
+        );
+
+        let missing = TempDir::new().unwrap().path().join("missing.sqlite");
+        let unavailable = SqliteWarehouseConnector::new("t", "warehouse", &missing);
+        let error = unavailable.health().await.unwrap_err();
+        assert!(error.to_string().contains("unavailable"));
+    }
+
+    #[tokio::test]
+    async fn discover_paginates_without_silent_duplicates() {
+        let file = NamedTempFile::new().unwrap();
+        seed_tables(file.path(), &["alpha", "beta", "gamma", "delta"]);
+        let connector =
+            SqliteWarehouseConnector::new("t", "warehouse", file.path()).with_page_size(2);
+        let first = connector.discover("*", None).await.unwrap();
+        assert_eq!(first.items.len(), 2);
+        let second = connector
+            .discover("*", first.next_cursor.as_deref())
+            .await
+            .unwrap();
+        assert_eq!(second.items.len(), 2);
+        let mut refs: Vec<_> = first
+            .items
+            .iter()
+            .chain(second.items.iter())
+            .map(|item| item.reference.clone())
+            .collect();
+        let before = refs.len();
+        refs.sort();
+        refs.dedup();
+        assert_eq!(refs.len(), before);
+        assert!(second.next_cursor.is_none() || !second.items.is_empty());
+        let err = connector.discover("*", Some("missing-cursor")).await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn subscribe_recovers_from_cursor_and_read_is_version_bound() {
+        let file = NamedTempFile::new().unwrap();
+        seed_tables(file.path(), &["payments"]);
+        let connector = SqliteWarehouseConnector::new("t", "warehouse", file.path());
+        let first_event = connector
+            .emit_change(
+                "table:payments",
+                Some("v1".into()),
+                Some("v2".into()),
+                "schema",
+            )
+            .unwrap();
+        let second_event = connector
+            .emit_change(
+                "table:payments",
+                Some("v2".into()),
+                Some("v3".into()),
+                "schema",
+            )
+            .unwrap();
+        let page = connector
+            .subscribe(Some(&first_event.cursor))
+            .await
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].event_id, second_event.event_id);
+        assert!(connector.subscribe(Some("unknown-cursor")).await.is_err());
+
+        let observed = connector.observe("table:payments").await.unwrap();
+        let handle = connector
+            .read(
+                "table:payments",
+                &observed.source_version,
+                &capability("t", "warehouse"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle.source_version, observed.source_version);
+        assert!(
+            connector
+                .read("table:payments", "stale", &capability("t", "warehouse"))
+                .await
+                .is_err()
         );
     }
 }

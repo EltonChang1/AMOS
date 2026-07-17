@@ -22,13 +22,13 @@ This matrix makes the two manuscripts executable. The research paper defines the
 
 | Specification | Required Rust behavior |
 |---|---|
-| A – A-TXN | Generated state-transition guard, compare-and-swap sequence, terminal immutability, fenced jobs, idempotency and outbox records |
+| A – A-TXN | Generated state-transition guard, compare-and-swap sequence, terminal immutability, fenced jobs, Repairing transitions, hash-checked object finalization, idempotency and drainable outbox records |
 | B – persistence | Tenant-scoped repositories, immutable versions/evidence, indexed state, audit history, object finalization state |
 | C – task/context | Immutable task definition, required-role coverage, policy-first selection, explicit omissions/conflicts, non-governing compaction |
-| D – connectors | Typed `discover`, `observe`, `read`, `validate`, `subscribe`, and `health` interface plus conformance tests |
-| E – workers | Signed, audience-bound, expiring capability claims; typed plans; read-only SQL/statistics/chart workers; bounded repair |
-| F – claims/review | Structured claims, typed dependency edges, append-only corrections, independent validity dimensions, replay levels, bounded invalidation |
-| Minimum `/v1` API | Task lifecycle, permission-first memory search/write, SQL preflight, artifacts, claims, reviews, replay, and revalidation in `api::router` |
+| D – connectors | Typed `discover`, `observe`, `read`, `validate`, `subscribe`, and `health` interface plus C1 conformance tests for stable identity, overwrite/deletion, pagination/cursor recovery, and source-unavailable classification |
+| E – workers | Signed, audience-bound, expiring capability claims; typed plans; read-only SQL/statistics/chart workers; AST metric predicates; bounded repair |
+| F – claims/review | Structured claims with verification IDs, typed dependency edges, append-only corrections, job-driven independent validity dimensions, replay levels, bounded invalidation |
+| Minimum `/v1` API | Task lifecycle, permission-first memory search/write, SQL preflight, artifacts, claims, reviews, replay, revalidation, job processing, and outbox drain in `api::router` |
 
 ## First production slice
 
