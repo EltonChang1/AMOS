@@ -11,8 +11,15 @@ pub fn new_id(prefix: &str) -> String {
 }
 
 pub fn content_hash<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+    match serde_json::to_vec(value) {
+        Ok(bytes) => format!("sha256:{}", hex::encode(Sha256::digest(bytes))),
+        Err(error) => format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                format!(r#"{{"__amos_serialization_failure":"{error}"}}"#).into_bytes()
+            ))
+        ),
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -635,6 +642,18 @@ pub struct AuditEvent {
     pub policy_epoch: u64,
     pub details: Value,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OutboxEvent {
+    pub tenant_id: String,
+    pub event_id: String,
+    pub event_type: String,
+    pub aggregate_id: String,
+    pub idempotency_key: String,
+    pub payload: Value,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

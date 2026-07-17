@@ -2,7 +2,10 @@ use std::{collections::BTreeSet, ops::ControlFlow};
 
 use chrono::Utc;
 use sqlparser::{
-    ast::{Expr, ObjectName, Select, SelectItem, Visit, Visitor},
+    ast::{
+        BinaryOperator, Expr, FunctionArg, FunctionArgExpr, FunctionArguments, ObjectName, Query,
+        Select, SelectItem, SetExpr, Statement, Value, Visit, Visitor,
+    },
     dialect::GenericDialect,
     parser::Parser,
 };
@@ -60,9 +63,9 @@ impl Verifier {
             .as_ref()
             .map(|statements| {
                 statements.len() == 1
-                    && statements.first().is_some_and(|statement| {
-                        matches!(statement, sqlparser::ast::Statement::Query(_))
-                    })
+                    && statements
+                        .first()
+                        .is_some_and(|statement| matches!(statement, Statement::Query(_)))
             })
             .unwrap_or(false);
         record(
@@ -79,7 +82,6 @@ impl Verifier {
             errors.push(format!("SQL parse failed: {error}"));
         }
 
-        let normalized = normalize(sql);
         let schemas: Vec<_> = manifest
             .selected_objects
             .iter()
@@ -114,12 +116,15 @@ impl Verifier {
                 .as_object()?
                 .iter()
                 .find_map(|(old, new)| {
-                    normalized.contains(&normalize(old)).then(|| {
-                        format!(
-                            "COLUMN_SUPERSEDED:{old}:{}",
-                            new.as_str().unwrap_or_default()
-                        )
-                    })
+                    references
+                        .identifiers
+                        .contains(&old.to_lowercase())
+                        .then(|| {
+                            format!(
+                                "COLUMN_SUPERSEDED:{old}:{}",
+                                new.as_str().unwrap_or_default()
+                            )
+                        })
                 })
         });
         let unknown_table = references
@@ -150,7 +155,7 @@ impl Verifier {
             }),
             &mut errors,
         );
-        let blocked: Vec<_> = schemas
+        let blocked: BTreeSet<_> = schemas
             .iter()
             .flat_map(|schema| {
                 schema
@@ -161,10 +166,12 @@ impl Verifier {
                     .flatten()
                     .filter_map(|v| v.as_str())
             })
+            .map(str::to_lowercase)
             .collect();
-        let blocked_used = blocked
+        let blocked_used = references
+            .identifiers
             .iter()
-            .find(|column| normalized.contains(&normalize(column)));
+            .find(|column| blocked.contains(*column));
         record(
             &mut checks,
             "SCHEMA_BLOCKED_COLUMNS",
@@ -183,6 +190,11 @@ impl Verifier {
                 )
             })
             .collect();
+        let where_predicates = parsed
+            .as_ref()
+            .ok()
+            .map(|statements| collect_where_predicates(statements))
+            .unwrap_or_default();
         let missing_filter = metrics
             .iter()
             .flat_map(|metric| {
@@ -194,7 +206,7 @@ impl Verifier {
                     .flatten()
                     .filter_map(|v| v.as_str())
             })
-            .find(|filter| !normalized.contains(&normalize(filter)));
+            .find(|filter| !where_satisfies_filter(&where_predicates, filter));
         record(
             &mut checks,
             "METRIC_FILTERS",
@@ -203,6 +215,22 @@ impl Verifier {
             }),
             &mut errors,
         );
+        let needs_denominator = matches!(
+            step.expected_output_schema.as_str(),
+            "rate_comparison.v1" | "concentration.v1" | "timeseries.v1"
+        );
+        if needs_denominator {
+            record(
+                &mut checks,
+                "RESULT_DENOMINATOR",
+                if references.has_count_star {
+                    Ok(())
+                } else {
+                    Err("rate queries require COUNT(*) denominator".into())
+                },
+                &mut errors,
+            );
+        }
         for state in manifest.selected_objects.iter().filter(|object| {
             matches!(
                 object.memory_type,
@@ -366,12 +394,115 @@ fn record(
         }
     }
 }
-fn normalize(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+
+fn collect_where_predicates(statements: &[Statement]) -> BTreeSet<String> {
+    let mut predicates = BTreeSet::new();
+    for statement in statements {
+        if let Statement::Query(query) = statement {
+            collect_query_predicates(query, &mut predicates);
+        }
+    }
+    predicates
+}
+
+fn collect_query_predicates(query: &Query, predicates: &mut BTreeSet<String>) {
+    match query.body.as_ref() {
+        SetExpr::Select(select) => {
+            if let Some(selection) = &select.selection {
+                flatten_predicate_keys(selection, predicates);
+            }
+        }
+        SetExpr::Query(inner) => collect_query_predicates(inner, predicates),
+        SetExpr::SetOperation { left, right, .. } => {
+            if let SetExpr::Select(select) = left.as_ref()
+                && let Some(selection) = &select.selection
+            {
+                flatten_predicate_keys(selection, predicates);
+            }
+            if let SetExpr::Select(select) = right.as_ref()
+                && let Some(selection) = &select.selection
+            {
+                flatten_predicate_keys(selection, predicates);
+            }
+            if let SetExpr::Query(inner) = left.as_ref() {
+                collect_query_predicates(inner, predicates);
+            }
+            if let SetExpr::Query(inner) = right.as_ref() {
+                collect_query_predicates(inner, predicates);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn flatten_predicate_keys(expression: &Expr, predicates: &mut BTreeSet<String>) {
+    match expression {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => {
+            flatten_predicate_keys(left, predicates);
+            flatten_predicate_keys(right, predicates);
+        }
+        Expr::Nested(inner) => flatten_predicate_keys(inner, predicates),
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } => {
+            if let Some(key) = equality_key(left, right) {
+                predicates.insert(key);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn equality_key(left: &Expr, right: &Expr) -> Option<String> {
+    let left_id = identifier_name(left)?;
+    let right_value = literal_key(right)?;
+    Some(format!("{left_id}={right_value}"))
+}
+
+fn identifier_name(expression: &Expr) -> Option<String> {
+    match expression {
+        Expr::Identifier(identifier) => Some(identifier.value.to_lowercase()),
+        Expr::CompoundIdentifier(parts) => parts.last().map(|part| part.value.to_lowercase()),
+        _ => None,
+    }
+}
+
+fn literal_key(expression: &Expr) -> Option<String> {
+    match expression {
+        Expr::Value(value) => match &value.value {
+            Value::SingleQuotedString(text) | Value::DoubleQuotedString(text) => {
+                Some(format!("'{text}'"))
+            }
+            Value::Number(number, _) => Some(number.clone()),
+            Value::Boolean(flag) => Some(if *flag { "true" } else { "false" }.into()),
+            _ => None,
+        },
+        Expr::UnaryOp {
+            op: sqlparser::ast::UnaryOperator::Minus,
+            expr,
+        } => Some(format!("-{}", literal_key(expr)?)),
+        Expr::UnaryOp {
+            op: sqlparser::ast::UnaryOperator::Plus,
+            expr,
+        } => literal_key(expr),
+        _ => None,
+    }
+}
+
+fn where_satisfies_filter(predicates: &BTreeSet<String>, filter: &str) -> bool {
+    let Ok(expressions) =
+        Parser::parse_sql(&GenericDialect {}, &format!("SELECT 1 WHERE {filter}"))
+    else {
+        return false;
+    };
+    let required = collect_where_predicates(&expressions);
+    !required.is_empty() && required.iter().all(|key| predicates.contains(key))
 }
 
 #[derive(Default)]
@@ -379,6 +510,7 @@ struct SchemaReferences {
     relations: BTreeSet<String>,
     identifiers: BTreeSet<String>,
     aliases: BTreeSet<String>,
+    has_count_star: bool,
 }
 
 impl Visitor for SchemaReferences {
@@ -408,6 +540,30 @@ impl Visitor for SchemaReferences {
                     self.identifiers.insert(identifier.value.to_lowercase());
                 }
             }
+            Expr::Function(function) => {
+                let name = function.name.to_string().to_lowercase();
+                if name == "count" {
+                    match &function.args {
+                        FunctionArguments::List(list)
+                            if list.args.iter().any(|arg| {
+                                matches!(
+                                    arg,
+                                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard)
+                                        | FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(
+                                            _
+                                        ))
+                                )
+                            }) =>
+                        {
+                            self.has_count_star = true;
+                        }
+                        FunctionArguments::None => {
+                            // COUNT without args is not a valid denominator form.
+                        }
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
         ControlFlow::Continue(())
@@ -417,8 +573,36 @@ impl Visitor for SchemaReferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn normalize_ignores_sql_spacing() {
-        assert_eq!(normalize("is_test = FALSE"), normalize("is_test=false"));
+    fn metric_filters_require_where_predicates_not_string_literals() {
+        let predicates = collect_where_predicates(
+            &Parser::parse_sql(
+                &GenericDialect {},
+                "SELECT 'environment = ''production''' AS note FROM payment_events WHERE is_test_account = 0",
+            )
+            .unwrap(),
+        );
+        assert!(where_satisfies_filter(&predicates, "is_test_account = 0"));
+        assert!(!where_satisfies_filter(
+            &predicates,
+            "environment = 'production'"
+        ));
+    }
+
+    #[test]
+    fn metric_filters_accept_equivalent_where_equality() {
+        let predicates = collect_where_predicates(
+            &Parser::parse_sql(
+                &GenericDialect {},
+                "SELECT 1 FROM payment_events WHERE environment = 'production' AND is_test_account = 0",
+            )
+            .unwrap(),
+        );
+        assert!(where_satisfies_filter(
+            &predicates,
+            "environment = 'production'"
+        ));
+        assert!(where_satisfies_filter(&predicates, "is_test_account = 0"));
     }
 }

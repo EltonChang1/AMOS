@@ -57,6 +57,8 @@ pub fn router(runtime: AmosRuntime) -> Router {
         .route("/v1/verify/sql", post(verify_sql))
         .route("/v1/audit", get(audit))
         .route("/v1/jobs", get(list_jobs).post(enqueue_job))
+        .route("/v1/jobs/process", post(process_jobs))
+        .route("/v1/outbox", get(list_outbox).post(drain_outbox))
         .route("/v1/connectors/health", get(connector_health))
         .route("/v1/source-events/process", post(process_source_events))
         .with_state(state)
@@ -438,6 +440,65 @@ async fn list_jobs(
             .runtime
             .store
             .list_jobs(&user.tenant_id, query.limit.unwrap_or(100))?,
+    ))
+}
+#[derive(Debug, Deserialize)]
+struct ProcessJobsRequest {
+    worker: Option<String>,
+    limit: Option<usize>,
+}
+async fn process_jobs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ProcessJobsRequest>,
+) -> Result<Json<Vec<Value>>> {
+    let user = identity(&state, &headers)?;
+    if !user.roles.contains("admin") {
+        return Err(crate::error::AmosError::PermissionDenied(
+            "operations role required".into(),
+        ));
+    }
+    Ok(Json(state.runtime.process_jobs(
+        &user,
+        input.worker.as_deref().unwrap_or("ops-worker"),
+        input.limit.unwrap_or(10),
+    )?))
+}
+async fn list_outbox(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<Limit>,
+) -> Result<Json<Vec<crate::domain::OutboxEvent>>> {
+    let user = identity(&state, &headers)?;
+    if !user.roles.contains("admin") {
+        return Err(crate::error::AmosError::PermissionDenied(
+            "operations role required".into(),
+        ));
+    }
+    Ok(Json(state.runtime.store.list_pending_outbox(
+        &user.tenant_id,
+        query.limit.unwrap_or(100),
+    )?))
+}
+#[derive(Debug, Deserialize)]
+struct DrainOutboxRequest {
+    limit: Option<usize>,
+}
+async fn drain_outbox(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<DrainOutboxRequest>,
+) -> Result<Json<Vec<crate::domain::OutboxEvent>>> {
+    let user = identity(&state, &headers)?;
+    if !user.roles.contains("admin") {
+        return Err(crate::error::AmosError::PermissionDenied(
+            "operations role required".into(),
+        ));
+    }
+    Ok(Json(
+        state
+            .runtime
+            .drain_outbox(&user, input.limit.unwrap_or(100))?,
     ))
 }
 #[derive(Debug, Deserialize)]

@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 use crate::{
     Result,
     domain::{
-        AuditEvent, Authority, Claim, DependencyEdge, EdgeEndpoint, Identity, MemoryObject,
-        MemoryType, Review, ReviewDecision, ReviewState, SemanticValidity, content_hash, new_id,
+        AuditEvent, Authority, EdgeEndpoint, Identity, MemoryObject, MemoryType, Review,
+        ReviewDecision, ReviewState, SemanticValidity, content_hash, new_id,
     },
     error::AmosError,
     memory::MemoryService,
@@ -47,8 +47,8 @@ impl EvidenceService {
         target_type: &str,
         target_id: &str,
         source_version: Option<String>,
-    ) -> DependencyEdge {
-        let mut edge = DependencyEdge {
+    ) -> crate::domain::DependencyEdge {
+        let mut edge = crate::domain::DependencyEdge {
             edge_id: new_id("edge"),
             tenant_id: tenant_id.into(),
             from: EdgeEndpoint {
@@ -163,49 +163,19 @@ impl EvidenceService {
         let edges = self.store.list_edges_to(tenant_id, "memory", object_id)?;
         let mut affected = vec![];
         for edge in edges {
-            if let Some(mut claim) = self
-                .store
-                .list_claims(tenant_id, &self.claim_artifact(tenant_id, &edge.from.id)?)
-                .ok()
-                .and_then(|claims| {
-                    claims
-                        .into_iter()
-                        .find(|claim| claim.claim_id == edge.from.id)
-                })
-            {
-                claim.semantic_validity = SemanticValidity::PendingRevalidation;
-                self.store.update_claim(&claim)?;
-                affected.push(claim.claim_id.clone());
-                self.scheduler.enqueue(
-                    tenant_id,
-                    "claim.revalidate",
-                    json!({"claim_id":claim.claim_id,"reason":reason}),
-                    format!("invalidate/{}/{}/{}", object_id, claim.claim_id, reason),
-                )?;
-            }
+            let Some(mut claim) = self.store.get_claim(tenant_id, &edge.from.id)? else {
+                continue;
+            };
+            claim.semantic_validity = SemanticValidity::PendingRevalidation;
+            self.store.update_claim(&claim)?;
+            affected.push(claim.claim_id.clone());
+            self.scheduler.enqueue(
+                tenant_id,
+                "claim.revalidate",
+                json!({"claim_id":claim.claim_id,"artifact_id":claim.artifact_id,"reason":reason}),
+                format!("invalidate/{}/{}/{}", object_id, claim.claim_id, reason),
+            )?;
         }
         Ok(affected)
-    }
-
-    fn claim_artifact(&self, tenant: &str, claim_id: &str) -> Result<String> {
-        let edges = self.store.list_edges_from(tenant, "claim", claim_id)?;
-        if !edges.is_empty() {
-            let claims = self
-                .store
-                .list_artifacts(tenant, 100)?
-                .into_iter()
-                .flat_map(|artifact| {
-                    self.store
-                        .list_claims(tenant, &artifact.artifact_id)
-                        .unwrap_or_default()
-                })
-                .collect::<Vec<Claim>>();
-            return claims
-                .into_iter()
-                .find(|claim| claim.claim_id == claim_id)
-                .map(|claim| claim.artifact_id)
-                .ok_or_else(|| AmosError::NotFound(claim_id.into()));
-        }
-        Err(AmosError::NotFound(claim_id.into()))
     }
 }
