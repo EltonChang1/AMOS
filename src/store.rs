@@ -11,8 +11,9 @@ use crate::{
     Result,
     domain::{
         AnalyticalTransaction, Artifact, AtxnState, AuditEvent, Claim, ContextManifest,
-        DependencyEdge, ExecutionRecord, Job, JobState, MemoryObject, MemoryStatus, Outcome,
-        PublicationValidity, ReplayPackage, Review, TaskDefinition, TypedPlan, VerificationRecord,
+        DependencyEdge, ExecutionRecord, Job, JobState, MemoryObject, MemoryStatus, OutboxEvent,
+        Outcome, PublicationValidity, ReplayPackage, Review, TaskDefinition, TypedPlan,
+        VerificationRecord,
     },
     error::AmosError,
 };
@@ -250,6 +251,42 @@ impl Store {
             "SELECT body_json FROM memory_objects WHERE tenant_id=?1 AND object_id=?2",
             params![tenant_id, object_id],
         )
+    }
+
+    pub fn update_memory(&self, object: &MemoryObject) -> Result<()> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            r#"UPDATE memory_objects SET
+                logical_key=?1, memory_type=?2, source_id=?3, source_version=?4,
+                authority=?5, effective_start=?6, effective_end=?7, recorded_at=?8,
+                permissions_json=?9, sensitivity=?10, version=?11, status=?12,
+                superseded_by=?13, content_hash=?14, governing=?15, body_json=?16
+             WHERE tenant_id=?17 AND object_id=?18"#,
+            params![
+                object.logical_key,
+                enum_json(&object.memory_type)?,
+                object.source_id,
+                object.source_version,
+                object.authority.rank(),
+                object.effective_start.map(|value| value.to_rfc3339()),
+                object.effective_end.map(|value| value.to_rfc3339()),
+                object.recorded_at.to_rfc3339(),
+                to_json(&object.permissions)?,
+                object.sensitivity,
+                object.version,
+                enum_json(&object.status)?,
+                object.superseded_by,
+                object.content_hash,
+                object.governing,
+                to_json(object)?,
+                object.tenant_id,
+                object.object_id,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(AmosError::NotFound(object.object_id.clone()));
+        }
+        Ok(())
     }
 
     pub fn list_active_memory(&self, tenant_id: &str) -> Result<Vec<MemoryObject>> {
@@ -685,6 +722,128 @@ impl Store {
         Ok(())
     }
 
+    pub fn update_artifact(&self, artifact: &Artifact) -> Result<()> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE artifacts SET content_hash=?1,publication_validity=?2,body_json=?3 WHERE tenant_id=?4 AND artifact_id=?5",
+            params![
+                artifact.content_hash,
+                enum_json(&artifact.publication_validity)?,
+                to_json(artifact)?,
+                artifact.tenant_id,
+                artifact.artifact_id
+            ],
+        )?;
+        if changed != 1 {
+            return Err(AmosError::NotFound(artifact.artifact_id.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn list_pending_outbox(&self, tenant: &str, limit: usize) -> Result<Vec<OutboxEvent>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT tenant_id,event_id,event_type,aggregate_id,idempotency_key,payload_json,created_at,completed_at FROM outbox_events WHERE tenant_id=?1 AND completed_at IS NULL ORDER BY created_at ASC LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![tenant, limit.min(250) as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                tenant_id,
+                event_id,
+                event_type,
+                aggregate_id,
+                idempotency_key,
+                payload,
+                created_at,
+                completed_at,
+            ) = row?;
+            Ok(OutboxEvent {
+                tenant_id,
+                event_id,
+                event_type,
+                aggregate_id,
+                idempotency_key,
+                payload: serde_json::from_str(&payload)?,
+                created_at: parse_time(&created_at)?,
+                completed_at: completed_at.as_deref().map(parse_time).transpose()?,
+            })
+        })
+        .collect()
+    }
+
+    pub fn complete_outbox(&self, tenant: &str, event_id: &str) -> Result<OutboxEvent> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row = transaction
+            .query_row(
+                "SELECT tenant_id,event_id,event_type,aggregate_id,idempotency_key,payload_json,created_at,completed_at FROM outbox_events WHERE tenant_id=?1 AND event_id=?2",
+                params![tenant, event_id],
+                |row| {
+                    Ok(OutboxRow {
+                        tenant_id: row.get(0)?,
+                        event_id: row.get(1)?,
+                        event_type: row.get(2)?,
+                        aggregate_id: row.get(3)?,
+                        idempotency_key: row.get(4)?,
+                        payload: row.get(5)?,
+                        created_at: row.get(6)?,
+                        completed_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(OutboxRow {
+            tenant_id,
+            event_id: stored_event_id,
+            event_type,
+            aggregate_id,
+            idempotency_key,
+            payload,
+            created_at,
+            completed_at,
+        }) = row
+        else {
+            return Err(AmosError::NotFound(event_id.into()));
+        };
+        let completed = if let Some(existing) = completed_at {
+            parse_time(&existing)?
+        } else {
+            let now = Utc::now();
+            let changed = transaction.execute(
+                "UPDATE outbox_events SET completed_at=?1 WHERE tenant_id=?2 AND event_id=?3 AND completed_at IS NULL",
+                params![now.to_rfc3339(), tenant, stored_event_id],
+            )?;
+            if changed != 1 {
+                return Err(AmosError::Conflict(
+                    "outbox event completed concurrently".into(),
+                ));
+            }
+            now
+        };
+        transaction.commit()?;
+        Ok(OutboxEvent {
+            tenant_id,
+            event_id: stored_event_id,
+            event_type,
+            aggregate_id,
+            idempotency_key,
+            payload: serde_json::from_str(&payload)?,
+            created_at: parse_time(&created_at)?,
+            completed_at: Some(completed),
+        })
+    }
+
     pub fn append_audit(&self, event: &AuditEvent) -> Result<()> {
         let connection = self.connection()?;
         insert_audit_tx(&connection, event)
@@ -858,6 +1017,17 @@ fn insert_audit_tx(connection: &Connection, event: &AuditEvent) -> Result<()> {
     Ok(())
 }
 
+struct OutboxRow {
+    tenant_id: String,
+    event_id: String,
+    event_type: String,
+    aggregate_id: String,
+    idempotency_key: String,
+    payload: String,
+    created_at: String,
+    completed_at: Option<String>,
+}
+
 fn to_json<T: Serialize>(value: &T) -> Result<String> {
     Ok(serde_json::to_string(value)?)
 }
@@ -868,6 +1038,12 @@ fn from_json<T: DeserializeOwned>(value: &str) -> Result<T> {
 
 fn enum_json<T: Serialize>(value: &T) -> Result<String> {
     Ok(serde_json::to_string(value)?.trim_matches('"').to_string())
+}
+
+fn parse_time(value: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|error| AmosError::Validation(format!("invalid timestamp: {error}")))
 }
 
 #[cfg(test)]

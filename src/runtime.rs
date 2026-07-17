@@ -13,10 +13,11 @@ use crate::{
     context::ContextCompiler,
     domain::{
         AnalyticalTransaction, Artifact, AtxnState, AuditEvent, Authority, Claim, ContextManifest,
-        DependencyEdge, EdgeEndpoint, ExecutionRecord, Identity, Outcome, PlanStep,
-        PolicyVisibility, PublicationValidity, ReplayAvailability, ReplayPackage, ReplayResult,
-        Review, ReviewDecision, ReviewResult, ReviewState, RiskClass, RunResult, SemanticValidity,
-        SqlPreflight, SupersessionState, TypedPlan, content_hash, new_id,
+        DependencyEdge, EdgeEndpoint, ExecutionRecord, Identity, Job, MemoryStatus, OutboxEvent,
+        Outcome, PlanStep, PolicyVisibility, PublicationValidity, ReplayAvailability,
+        ReplayPackage, ReplayResult, Review, ReviewDecision, ReviewResult, ReviewState, RiskClass,
+        RunResult, SemanticValidity, SqlPreflight, SupersessionState, TypedPlan, content_hash,
+        new_id,
     },
     error::AmosError,
     evidence::EvidenceService,
@@ -153,8 +154,8 @@ impl AmosRuntime {
             &atxn.atxn_id,
             &request,
             &definition,
-            parse_time(WINDOW_START),
-            parse_time(WINDOW_END),
+            try_parse_time(WINDOW_START)?,
+            try_parse_time(WINDOW_END)?,
         )?;
         if !manifest.conflicts.is_empty() {
             let _ = self.advance(&atxn, AtxnState::NeedsReview, Some(Outcome::NeedsReview))?;
@@ -165,7 +166,16 @@ impl AmosRuntime {
         self.store.save_manifest(&manifest)?;
         atxn = self.advance(&atxn, AtxnState::Planning, None)?;
         let mut plan = self.build_plan(&atxn, &manifest);
+        self.store.save_plan(&plan)?;
+        atxn = self.advance(&atxn, AtxnState::Executing, None)?;
+        if atxn.policy_epoch != identity.policy_epoch {
+            let _ = self.advance(&atxn, AtxnState::Aborted, Some(Outcome::Abort))?;
+            return Err(AmosError::Conflict(
+                "policy epoch changed before execution".into(),
+            ));
+        }
         let mut verifications = vec![];
+        let mut executions = vec![];
         for index in 0..plan.steps.len() {
             let mut repairs = 0;
             loop {
@@ -176,11 +186,13 @@ impl AmosRuntime {
                 verifications.push(verification.clone());
                 if verification.outcome != Outcome::Repair {
                     if verification.outcome == Outcome::Reject {
+                        atxn = self.advance(&atxn, AtxnState::Repairing, None)?;
                         let _ = self.advance(&atxn, AtxnState::Rejected, Some(Outcome::Reject))?;
                         return Err(AmosError::Validation(verification.errors.join("; ")));
                     }
                     break;
                 }
+                atxn = self.advance(&atxn, AtxnState::Repairing, None)?;
                 if repairs >= definition.budgets.max_repairs {
                     let _ =
                         self.advance(&atxn, AtxnState::NeedsReview, Some(Outcome::NeedsReview))?;
@@ -192,24 +204,36 @@ impl AmosRuntime {
                     .and_then(|repair| self.verifier.repair_step(&plan.steps[index], repair))
                     .ok_or_else(|| AmosError::Validation("permitted repair is invalid".into()))?;
                 plan.steps[index] = repair;
+                self.store.save_plan(&plan)?;
+                atxn = self.advance(&atxn, AtxnState::Executing, None)?;
                 repairs += 1;
             }
-        }
-        self.store.save_plan(&plan)?;
-        atxn = self.advance(&atxn, AtxnState::Executing, None)?;
-        let fence = atxn.state_seq;
-        let mut executions = vec![];
-        for step in &plan.steps {
-            let capability = self.capability_issuer.issue(identity, &plan, step, fence)?;
-            let execution = self
-                .sql_worker
-                .execute(identity, &plan, step, &capability, fence)?;
+            if atxn.policy_epoch != identity.policy_epoch {
+                let _ = self.advance(&atxn, AtxnState::Aborted, Some(Outcome::Abort))?;
+                return Err(AmosError::Conflict(
+                    "policy epoch changed before capability issue".into(),
+                ));
+            }
+            let fence = atxn.state_seq;
+            let capability =
+                self.capability_issuer
+                    .issue(identity, &plan, &plan.steps[index], fence)?;
+            let execution =
+                self.sql_worker
+                    .execute(identity, &plan, &plan.steps[index], &capability, fence)?;
             self.store.save_execution(&execution)?;
             executions.push(execution);
         }
         atxn = self.advance(&atxn, AtxnState::Composing, None)?;
-        let (artifact, claims, edges) = self.compose(&atxn, &manifest, &executions)?;
+        let (mut artifact, mut claims, edges) = self.compose(&atxn, &manifest, &executions)?;
         atxn = self.advance(&atxn, AtxnState::Verifying, None)?;
+        let step_verification_ids: Vec<String> = verifications
+            .iter()
+            .map(|verification| verification.verification_id.clone())
+            .collect();
+        for claim in &mut claims {
+            claim.verification_ids = step_verification_ids.clone();
+        }
         let claim_verification = self.verifier.verify_claims(
             &identity.tenant_id,
             &atxn.atxn_id,
@@ -221,6 +245,11 @@ impl AmosRuntime {
         if claim_verification.outcome == Outcome::Reject {
             let _ = self.advance(&atxn, AtxnState::Rejected, Some(Outcome::Reject))?;
             return Err(AmosError::Validation(claim_verification.errors.join("; ")));
+        }
+        for claim in &mut claims {
+            claim
+                .verification_ids
+                .push(claim_verification.verification_id.clone());
         }
         verifications.push(claim_verification.clone());
         atxn = self.advance(&atxn, AtxnState::Revalidating, None)?;
@@ -235,6 +264,7 @@ impl AmosRuntime {
             ));
         }
         if atxn.policy_epoch != identity.policy_epoch {
+            let _ = self.advance(&atxn, AtxnState::Aborted, Some(Outcome::Abort))?;
             return Err(AmosError::Conflict(
                 "policy epoch changed before commit".into(),
             ));
@@ -262,7 +292,8 @@ impl AmosRuntime {
         atxn = if review_required {
             self.advance(&atxn, AtxnState::NeedsReview, Some(Outcome::NeedsReview))?
         } else {
-            let atxn = self.advance(&atxn, AtxnState::ObjectFinalizing, None)?;
+            atxn = self.advance(&atxn, AtxnState::ObjectFinalizing, None)?;
+            artifact = self.finalize_artifact(artifact)?;
             let atxn = self.advance(&atxn, AtxnState::PublicationPending, None)?;
             self.advance(
                 &atxn,
@@ -322,21 +353,25 @@ impl AmosRuntime {
                 changed.push(execution.execution_id)
             }
         }
-        let status = if changed.is_empty() {
+        let artifact_matches = package.expected_artifact_hash == artifact.content_hash;
+        let status = if changed.is_empty() && artifact_matches {
             Outcome::Pass
         } else {
             Outcome::Warning
         };
+        let mut warnings = vec![];
+        if !changed.is_empty() {
+            warnings.push("one or more execution hashes changed".into());
+        }
+        if !artifact_matches {
+            warnings.push("artifact content hash differs from replay package".into());
+        }
         Ok(ReplayResult {
             artifact_id: artifact.artifact_id,
             status,
             matching_execution_ids: matching,
-            changed_execution_ids: changed.clone(),
-            warnings: if changed.is_empty() {
-                vec![]
-            } else {
-                vec!["one or more execution hashes changed".into()]
-            },
+            changed_execution_ids: changed,
+            warnings,
             errors: vec![],
         })
     }
@@ -358,8 +393,8 @@ impl AmosRuntime {
             &atxn_id,
             request,
             &definition,
-            parse_time(WINDOW_START),
-            parse_time(WINDOW_END),
+            try_parse_time(WINDOW_START)?,
+            try_parse_time(WINDOW_END)?,
         )?;
         if !manifest.conflicts.is_empty() {
             return Err(AmosError::Conflict(
@@ -387,48 +422,16 @@ impl AmosRuntime {
         self.store
             .get_artifact(&identity.tenant_id, artifact_id)?
             .ok_or_else(|| AmosError::NotFound(artifact_id.into()))?;
-        let mut claims = self.store.list_claims(&identity.tenant_id, artifact_id)?;
-        let replay = self
-            .store
-            .get_replay_package(&identity.tenant_id, artifact_id)?;
+        let claims = self.store.list_claims(&identity.tenant_id, artifact_id)?;
         let mut changes = vec![];
-        for claim in &mut claims {
-            let before_semantic = claim.semantic_validity;
-            let before_replay = claim.replay_availability;
-            let edges =
-                self.store
-                    .list_edges_from(&identity.tenant_id, "claim", &claim.claim_id)?;
-            let stale_memory = edges
-                .iter()
-                .filter(|edge| edge.to.endpoint_type == "memory")
-                .any(|edge| {
-                    self.store
-                        .get_memory(&identity.tenant_id, &edge.to.id)
-                        .ok()
-                        .flatten()
-                        .is_none_or(|memory| {
-                            memory.status != crate::domain::MemoryStatus::Active
-                                || memory.superseded_by.is_some()
-                        })
-                });
-            if stale_memory {
-                claim.semantic_validity = SemanticValidity::Stale;
+        let mut updated = vec![];
+        for claim in claims {
+            let changed = self.revalidate_claim(identity, claim)?;
+            if let Some(change) = changed.get("change").cloned() {
+                changes.push(change);
             }
-            if replay
-                .as_ref()
-                .is_none_or(|package| package.retained_until < Utc::now())
-            {
-                claim.replay_availability = ReplayAvailability::Expired;
-            }
-            if before_semantic != claim.semantic_validity
-                || before_replay != claim.replay_availability
-            {
-                self.store.update_claim(claim)?;
-                changes.push(json!({
-                    "claim_id": claim.claim_id,
-                    "semantic_validity": {"before":before_semantic,"after":claim.semantic_validity},
-                    "replay_availability": {"before":before_replay,"after":claim.replay_availability}
-                }));
+            if let Some(claim) = changed.get("claim").cloned() {
+                updated.push(claim);
             }
         }
         self.store.append_audit(&AuditEvent {
@@ -449,7 +452,57 @@ impl AmosRuntime {
             details: json!({"changed_claims":changes.len()}),
             created_at: Utc::now(),
         })?;
-        Ok(json!({"artifact_id":artifact_id,"changes":changes,"claims":claims}))
+        Ok(json!({"artifact_id":artifact_id,"changes":changes,"claims":updated}))
+    }
+
+    pub fn process_jobs(
+        &self,
+        identity: &Identity,
+        worker: &str,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        let mut results = vec![];
+        for _ in 0..limit.max(1) {
+            let Some(job) = self.scheduler.acquire(&identity.tenant_id, worker, 30)? else {
+                break;
+            };
+            let fence = job.fencing_token;
+            match self.dispatch_job(identity, &job) {
+                Ok(detail) => {
+                    self.scheduler.complete(job.clone(), fence)?;
+                    results.push(json!({
+                        "job_id": job.job_id,
+                        "job_type": job.job_type,
+                        "status": "complete",
+                        "detail": detail
+                    }));
+                }
+                Err(error) => {
+                    self.scheduler.fail(job.clone(), fence, error.to_string())?;
+                    results.push(json!({
+                        "job_id": job.job_id,
+                        "job_type": job.job_type,
+                        "status": "failed",
+                        "error": error.to_string()
+                    }));
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn drain_outbox(&self, identity: &Identity, limit: usize) -> Result<Vec<OutboxEvent>> {
+        let pending = self
+            .store
+            .list_pending_outbox(&identity.tenant_id, limit.max(1))?;
+        let mut completed = Vec::with_capacity(pending.len());
+        for event in pending {
+            completed.push(
+                self.store
+                    .complete_outbox(&identity.tenant_id, &event.event_id)?,
+            );
+        }
+        Ok(completed)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -509,6 +562,7 @@ impl AmosRuntime {
             atxn = self.advance(&atxn, AtxnState::Revalidating, None)?;
             atxn = self.advance(&atxn, AtxnState::EvidenceCommitted, None)?;
             atxn = self.advance(&atxn, AtxnState::ObjectFinalizing, None)?;
+            artifact = self.finalize_artifact(artifact)?;
             atxn = self.advance(&atxn, AtxnState::PublicationPending, None)?;
             let outcome = if self
                 .store
@@ -600,6 +654,122 @@ impl AmosRuntime {
             next,
             outcome,
         )
+    }
+
+    fn finalize_artifact(&self, mut artifact: Artifact) -> Result<Artifact> {
+        let expected = content_hash(&artifact.content);
+        if expected != artifact.content_hash {
+            artifact.object_state = "failed".into();
+            let _ = self.store.update_artifact(&artifact);
+            return Err(AmosError::Conflict(
+                "artifact content hash mismatch during object finalization".into(),
+            ));
+        }
+        artifact.object_state = "finalized".into();
+        self.store.update_artifact(&artifact)?;
+        Ok(artifact)
+    }
+
+    fn dispatch_job(&self, identity: &Identity, job: &Job) -> Result<Value> {
+        match job.job_type.as_str() {
+            "claim.revalidate" => {
+                if let Some(claim_id) = job.payload.get("claim_id").and_then(Value::as_str) {
+                    let claim = self
+                        .store
+                        .get_claim(&identity.tenant_id, claim_id)?
+                        .ok_or_else(|| AmosError::NotFound(claim_id.into()))?;
+                    return self.revalidate_claim(identity, claim);
+                }
+                let artifact_id = job
+                    .payload
+                    .get("artifact_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AmosError::Validation(
+                            "claim.revalidate requires claim_id or artifact_id".into(),
+                        )
+                    })?;
+                self.revalidate_artifact(identity, artifact_id)
+            }
+            other => Err(AmosError::Validation(format!(
+                "unsupported job type: {other}"
+            ))),
+        }
+    }
+
+    fn revalidate_claim(&self, identity: &Identity, mut claim: Claim) -> Result<Value> {
+        let before_semantic = claim.semantic_validity;
+        let before_replay = claim.replay_availability;
+        let before_policy = claim.policy_visibility;
+        let edges = self
+            .store
+            .list_edges_from(&identity.tenant_id, "claim", &claim.claim_id)?;
+        let mut invalid = false;
+        let mut stale = false;
+        let mut denied = false;
+        for edge in edges
+            .iter()
+            .filter(|edge| edge.to.endpoint_type == "memory")
+        {
+            match self.store.get_memory(&identity.tenant_id, &edge.to.id)? {
+                None => stale = true,
+                Some(memory) => {
+                    if matches!(
+                        memory.status,
+                        MemoryStatus::Revoked | MemoryStatus::Tombstoned
+                    ) {
+                        invalid = true;
+                    } else if memory.status != MemoryStatus::Active
+                        || memory.superseded_by.is_some()
+                    {
+                        stale = true;
+                    }
+                    if !self.policy.can_read_memory(identity, &memory) {
+                        denied = true;
+                    }
+                }
+            }
+        }
+        claim.semantic_validity = if invalid {
+            SemanticValidity::Invalid
+        } else if stale {
+            SemanticValidity::Stale
+        } else if matches!(before_semantic, SemanticValidity::PendingRevalidation) {
+            SemanticValidity::Current
+        } else {
+            claim.semantic_validity
+        };
+        if denied {
+            claim.policy_visibility = PolicyVisibility::Denied;
+        }
+        let replay = self
+            .store
+            .get_replay_package(&identity.tenant_id, &claim.artifact_id)?;
+        if replay
+            .as_ref()
+            .is_none_or(|package| package.retained_until < Utc::now())
+        {
+            claim.replay_availability = ReplayAvailability::Expired;
+        }
+        let changed = before_semantic != claim.semantic_validity
+            || before_replay != claim.replay_availability
+            || before_policy != claim.policy_visibility;
+        if changed {
+            self.store.update_claim(&claim)?;
+        }
+        Ok(json!({
+            "claim": claim,
+            "change": if changed {
+                Some(json!({
+                    "claim_id": claim.claim_id,
+                    "semantic_validity": {"before":before_semantic,"after":claim.semantic_validity},
+                    "policy_visibility": {"before":before_policy,"after":claim.policy_visibility},
+                    "replay_availability": {"before":before_replay,"after":claim.replay_availability}
+                }))
+            } else {
+                None
+            }
+        }))
     }
     fn build_plan(&self, atxn: &AnalyticalTransaction, manifest: &ContextManifest) -> TypedPlan {
         let base = "event_time >= '2026-07-07T08:00:00Z' AND event_time < '2026-07-07T20:00:00Z' AND environment = 'production' AND is_test_account = 0";
@@ -712,7 +882,7 @@ impl AmosRuntime {
             content_hash: content_hash(&report),
             audience: "internal".into(),
             risk_class: RiskClass::MaterialInternal,
-            object_state: "finalized".into(),
+            object_state: "pending_promotion".into(),
             publication_validity: PublicationValidity::Draft,
             created_at: Utc::now(),
         };
@@ -834,14 +1004,13 @@ impl AmosRuntime {
             .get_plan(tenant, &package.plan_id)?
             .ok_or_else(|| AmosError::NotFound("plan".into()))?;
         let claims = self.store.list_claims(tenant, &artifact.artifact_id)?;
-        let dependencies = claims
-            .iter()
-            .flat_map(|claim| {
+        let mut dependencies = Vec::new();
+        for claim in &claims {
+            dependencies.extend(
                 self.store
-                    .list_edges_from(tenant, "claim", &claim.claim_id)
-                    .unwrap_or_default()
-            })
-            .collect();
+                    .list_edges_from(tenant, "claim", &claim.claim_id)?,
+            );
+        }
         Ok(RunResult {
             transaction,
             manifest,
@@ -956,8 +1125,8 @@ fn find_execution<'a>(values: &'a [ExecutionRecord], step: &str) -> Result<&'a E
         .find(|e| e.step_id == step)
         .ok_or_else(|| AmosError::NotFound(format!("execution {step}")))
 }
-fn parse_time(value: &str) -> chrono::DateTime<Utc> {
+fn try_parse_time(value: &str) -> Result<chrono::DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
-        .unwrap()
-        .with_timezone(&Utc)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|error| AmosError::Validation(format!("invalid timestamp '{value}': {error}")))
 }

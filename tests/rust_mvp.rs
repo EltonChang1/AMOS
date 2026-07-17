@@ -2,8 +2,9 @@ use amos::{
     AmosRuntime, RuntimeConfig,
     api::demo_identities,
     domain::{
-        AtxnState, Authority, JobState, MemoryObject, MemoryType, Outcome, PublicationValidity,
-        ReviewDecision, ReviewState, content_hash,
+        AtxnState, Authority, Identity, JobState, MemoryObject, MemoryType, Outcome,
+        PolicyVisibility, PublicationValidity, ReviewDecision, ReviewState, SemanticValidity,
+        content_hash, new_id,
     },
     seed,
     store::Store,
@@ -41,6 +42,13 @@ async fn complete_vertical_slice_is_review_gated_and_replayable() {
     assert!(result.manifest.conflicts.is_empty());
     assert_eq!(result.manifest.required_role_coverage.len(), 5);
     assert_eq!(result.executions.len(), 3);
+    assert_eq!(result.artifact.object_state, "pending_promotion");
+    assert!(
+        result
+            .claims
+            .iter()
+            .all(|claim| !claim.verification_ids.is_empty())
+    );
     assert!(
         result
             .claims
@@ -212,6 +220,7 @@ async fn authorized_approval_completes_the_local_publication_lifecycle() {
         .await
         .unwrap();
     assert_eq!(approved.transaction.state, AtxnState::Published);
+    assert_eq!(approved.artifact.object_state, "finalized");
     assert_eq!(
         approved.artifact.publication_validity,
         PublicationValidity::ValidAtPublication
@@ -282,6 +291,20 @@ async fn verifier_rejects_unsafe_queries_and_permits_only_declared_repairs() {
     assert_eq!(filter_result.outcome, Outcome::Reject);
     assert!(
         filter_result
+            .errors
+            .iter()
+            .any(|error| error.contains("required metric filter"))
+    );
+
+    let mut literal_bypass = template.clone();
+    literal_bypass.parameters["sql"] = json!(
+        "SELECT 'environment = ''production''' AS note, COUNT(*) AS attempts FROM payment_events WHERE is_test_account = 0"
+    );
+    let bypass_result =
+        verifier.verify_step(identity, &definition, &result.manifest, &literal_bypass);
+    assert_eq!(bypass_result.outcome, Outcome::Reject);
+    assert!(
+        bypass_result
             .errors
             .iter()
             .any(|error| error.contains("required metric filter"))
@@ -499,5 +522,161 @@ fn scheduler_rejects_a_stale_fencing_token() {
             .unwrap()
             .state,
         JobState::Complete
+    );
+}
+
+#[tokio::test]
+async fn claim_revalidate_jobs_update_independent_validity_dimensions() {
+    let (_root, runtime, _config) = runtime();
+    let identities = demo_identities();
+    let result = runtime
+        .run_task(
+            &identities["analyst_001"],
+            "Investigate payment failures".into(),
+            "revalidate-jobs".into(),
+        )
+        .await
+        .unwrap();
+    let schema_id = result.manifest.required_role_coverage["active_schema"][0].clone();
+    let affected = runtime
+        .evidence
+        .invalidate_memory(seed::TENANT, &schema_id, "schema_changed")
+        .unwrap();
+    assert!(!affected.is_empty());
+
+    let old_schema = runtime
+        .store
+        .get_memory(seed::TENANT, &schema_id)
+        .unwrap()
+        .unwrap();
+    let mut replacement = old_schema.clone();
+    replacement.object_id = new_id("mem");
+    replacement.source_version = "v3-next".into();
+    replacement.version = format!("{}-next", old_schema.version);
+    replacement.summary = "Superseding schema version".into();
+    replacement.supersedes = vec![schema_id.clone()];
+    replacement.superseded_by = None;
+    replacement.content_hash = content_hash(&replacement.content);
+    runtime
+        .memory
+        .supersede(&identities["admin"], &schema_id, replacement)
+        .unwrap();
+
+    let processed = runtime
+        .process_jobs(&identities["admin"], "revalidate-worker", 10)
+        .unwrap();
+    assert!(
+        processed
+            .iter()
+            .any(|item| item["status"] == "complete" && item["job_type"] == "claim.revalidate")
+    );
+    let claims = runtime
+        .store
+        .list_claims(seed::TENANT, &result.artifact.artifact_id)
+        .unwrap();
+    assert!(
+        claims
+            .iter()
+            .filter(|claim| affected.contains(&claim.claim_id))
+            .all(|claim| claim.semantic_validity == SemanticValidity::Stale)
+    );
+
+    let outbox = runtime.drain_outbox(&identities["admin"], 20).unwrap();
+    assert!(
+        outbox
+            .iter()
+            .any(|event| event.event_type == "evidence.committed")
+    );
+    assert!(
+        runtime
+            .store
+            .list_pending_outbox(seed::TENANT, 20)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn commit_time_policy_epoch_mismatch_blocks_publication() {
+    let (_root, runtime, _config) = runtime();
+    let identities = demo_identities();
+    let ok = runtime
+        .run_task(
+            &identities["analyst_001"],
+            "Investigate payment failures".into(),
+            "epoch-race".into(),
+        )
+        .await
+        .unwrap();
+    let mut atxn = runtime
+        .store
+        .get_transaction(seed::TENANT, &ok.transaction.atxn_id)
+        .unwrap()
+        .unwrap();
+    atxn.policy_epoch = 99;
+    runtime.store.checkpoint_transaction(&atxn).unwrap();
+    let conflict = runtime
+        .review_artifact(
+            &identities["reviewer_001"],
+            &ok.artifact.artifact_id,
+            ok.claims
+                .iter()
+                .filter(|claim| claim.review_state == ReviewState::NeedsReview)
+                .map(|claim| claim.claim_id.clone())
+                .collect(),
+            ReviewDecision::Approve,
+            "Should fail epoch revalidation".into(),
+            None,
+            Authority::ReviewerApproved,
+        )
+        .await;
+    assert!(conflict.is_err());
+}
+
+#[tokio::test]
+async fn revalidation_denies_policy_visibility_when_memory_is_unreadable() {
+    let (_root, runtime, _config) = runtime();
+    let identities = demo_identities();
+    let result = runtime
+        .run_task(
+            &identities["analyst_001"],
+            "Investigate payment failures".into(),
+            "policy-visibility".into(),
+        )
+        .await
+        .unwrap();
+    let metric_id = result.manifest.required_role_coverage["metric_definition"][0].clone();
+    let mut metric = runtime
+        .store
+        .get_memory(seed::TENANT, &metric_id)
+        .unwrap()
+        .unwrap();
+    metric.permissions = ["executive-only".into()].into_iter().collect();
+    runtime.store.update_memory(&metric).unwrap();
+
+    let restricted = Identity {
+        permissions: ["analytics".into(), "payments".into()]
+            .into_iter()
+            .collect(),
+        ..identities["analyst_001"].clone()
+    };
+    let claim = result
+        .claims
+        .iter()
+        .find(|claim| claim.claim_type == "metric_comparison")
+        .unwrap()
+        .clone();
+    let updated = runtime
+        .revalidate_artifact(&restricted, &result.artifact.artifact_id)
+        .unwrap();
+    let refreshed = updated["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["claim_id"] == claim.claim_id)
+        .unwrap();
+    assert_eq!(
+        refreshed["policy_visibility"],
+        json!(PolicyVisibility::Denied)
     );
 }
