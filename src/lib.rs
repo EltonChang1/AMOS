@@ -1,11 +1,14 @@
 pub mod api;
+pub mod auth;
 pub mod connectors;
 pub mod context;
 pub mod domain;
 pub mod error;
 pub mod evidence;
 pub mod memory;
+pub mod observability;
 pub mod policy;
+pub mod publication;
 pub mod runtime;
 pub mod scheduler;
 pub mod seed;

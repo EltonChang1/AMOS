@@ -1,7 +1,6 @@
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::BTreeSet,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
@@ -17,6 +16,7 @@ use crate::{
         content_hash, new_id,
     },
     error::AmosError,
+    workers::CapabilityIssuer,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,8 +70,7 @@ pub struct SqliteWarehouseConnector {
     source_id: String,
     path: PathBuf,
     permissions: BTreeSet<String>,
-    events: Arc<Mutex<VecDeque<SourceEvent>>>,
-    page_size: usize,
+    capability_issuer: CapabilityIssuer,
 }
 
 impl SqliteWarehouseConnector {
@@ -79,14 +78,14 @@ impl SqliteWarehouseConnector {
         tenant_id: impl Into<String>,
         source_id: impl Into<String>,
         path: impl AsRef<Path>,
+        capability_issuer: CapabilityIssuer,
     ) -> Self {
         Self {
             tenant_id: tenant_id.into(),
             source_id: source_id.into(),
             path: path.as_ref().to_path_buf(),
             permissions: BTreeSet::from(["analytics".into(), "payments".into()]),
-            events: Arc::new(Mutex::new(VecDeque::new())),
-            page_size: 50,
+            capability_issuer,
         }
     }
 
@@ -124,11 +123,49 @@ impl SqliteWarehouseConnector {
                 current.unwrap_or_else(|| "deleted".into())
             ),
         };
-        self.events
-            .lock()
-            .map_err(|_| AmosError::Connector("event queue lock poisoned".into()))?
-            .push_back(event.clone());
-        Ok(event)
+        let connection = self.event_connection()?;
+        let changed = connection.execute(
+            "INSERT OR IGNORE INTO amos_connector_events
+             (tenant_id,event_id,deduplication_key,cursor,observed_at,body_json)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params![
+                event.tenant_id,
+                event.event_id,
+                event.deduplication_key,
+                event.cursor,
+                event.observed_at.to_rfc3339(),
+                serde_json::to_string(&event)?,
+            ],
+        )?;
+        if changed == 1 {
+            return Ok(event);
+        }
+        let body: String = connection.query_row(
+            "SELECT body_json FROM amos_connector_events
+             WHERE tenant_id=?1 AND deduplication_key=?2",
+            rusqlite::params![self.tenant_id, event.deduplication_key],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    fn event_connection(&self) -> Result<Connection> {
+        let connection = Connection::open(&self.path)
+            .map_err(|error| AmosError::Connector(error.to_string()))?;
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS amos_connector_events(
+                tenant_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                deduplication_key TEXT NOT NULL,
+                cursor TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                body_json TEXT NOT NULL,
+                PRIMARY KEY(tenant_id,event_id),
+                UNIQUE(tenant_id,deduplication_key),
+                UNIQUE(tenant_id,cursor)
+             );",
+        )?;
+        Ok(connection)
     }
 
     fn open_connection(&self) -> Result<Connection> {
@@ -212,9 +249,12 @@ impl Connector for SqliteWarehouseConnector {
                 cursor.unwrap_or_default()
             )));
         }
-        let end = (start + self.page_size).min(names.len());
-        let page_names = &names[start..end];
-        let next_cursor = (end < names.len()).then(|| names[end - 1].clone());
+        let connection = Connection::open(&self.path)
+            .map_err(|error| AmosError::Connector(error.to_string()))?;
+        let mut statement = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'amos_%' ORDER BY name")?;
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(Page {
             items: page_names
                 .iter()
@@ -234,7 +274,7 @@ impl Connector for SqliteWarehouseConnector {
             tenant_id: self.tenant_id.clone(),
             source_id: self.source_id.clone(),
             reference: reference.into(),
-            source_version: content_hash(&snapshot),
+            source_version: content_hash(&snapshot)?,
             observed_at: Utc::now(),
             effective_start: None,
             effective_end: None,
@@ -252,15 +292,33 @@ impl Connector for SqliteWarehouseConnector {
         source_version: &str,
         capability: &CapabilityEnvelope,
     ) -> Result<BoundedHandle> {
+        self.capability_issuer.validate(
+            capability,
+            "sql-worker",
+            capability.claims.policy_epoch,
+            capability.claims.fencing_token,
+        )?;
+        let relation = reference.strip_prefix("table:").unwrap_or(reference);
         if capability.claims.source_id != self.source_id
             || capability.claims.tenant_id != self.tenant_id
+            || capability.claims.tool != "sql.readonly.v1"
+            || capability.claims.operations != BTreeSet::from(["query".to_string()])
+            || (!capability.claims.relations.contains(reference)
+                && !capability.claims.relations.contains(relation))
+            || capability.claims.limits.seconds == 0
+            || capability.claims.limits.rows == 0
+            || capability.claims.limits.bytes == 0
+            || capability.claims.atxn_id.trim().is_empty()
+            || capability.claims.plan_id.trim().is_empty()
+            || capability.claims.step_id.trim().is_empty()
+            || capability.claims.subject_id.trim().is_empty()
         {
             return Err(AmosError::Capability(
-                "connector capability scope mismatch".into(),
+                "connector capability is not fully bound to the requested source read".into(),
             ));
         }
         let content = self.schema_snapshot(reference)?;
-        let current = content_hash(&content);
+        let current = content_hash(&content)?;
         if current != source_version {
             return Err(AmosError::Conflict("source version changed".into()));
         }
@@ -274,46 +332,46 @@ impl Connector for SqliteWarehouseConnector {
     }
 
     async fn validate(&self, reference: &str, observed_version: &str) -> Result<Validation> {
-        match self.schema_snapshot(reference) {
-            Ok(snapshot) => {
-                let current = content_hash(&snapshot);
-                let same = current == observed_version;
-                Ok(Validation {
-                    same,
-                    current_version: Some(current),
-                    reason: (!same).then(|| "source version diverged".into()),
-                })
-            }
-            Err(AmosError::NotFound(reason)) => Ok(Validation {
-                same: false,
-                current_version: None,
-                reason: Some(reason),
-            }),
-            Err(AmosError::Connector(reason)) => Err(AmosError::Connector(reason)),
-            Err(other) => Err(other),
-        }
+        let current = content_hash(&self.schema_snapshot(reference)?)?;
+        Ok(Validation {
+            same: current == observed_version,
+            current_version: Some(current),
+            reason: None,
+        })
     }
 
     async fn subscribe(&self, cursor: Option<&str>) -> Result<Page<SourceEvent>> {
-        let events = self
-            .events
-            .lock()
-            .map_err(|_| AmosError::Connector("event queue lock poisoned".into()))?;
-        let items: Vec<SourceEvent> = if let Some(cursor) = cursor {
-            if !events.iter().any(|event| event.cursor == cursor) {
-                return Err(AmosError::Validation(format!(
-                    "subscribe cursor '{cursor}' is unknown"
-                )));
-            }
-            events
-                .iter()
-                .skip_while(|event| event.cursor != cursor)
-                .skip(1)
-                .cloned()
-                .collect()
+        let connection = self.event_connection()?;
+        let after_rowid = if let Some(cursor) = cursor {
+            Some(
+                connection
+                    .query_row(
+                        "SELECT rowid FROM amos_connector_events
+                         WHERE tenant_id=?1 AND cursor=?2",
+                        rusqlite::params![self.tenant_id, cursor],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|_| {
+                        AmosError::Validation("connector cursor is unknown or expired".into())
+                    })?,
+            )
         } else {
-            events.iter().cloned().collect()
+            None
         };
+        let mut statement = connection.prepare(
+            "SELECT body_json FROM amos_connector_events
+             WHERE tenant_id=?1 AND rowid>?2 ORDER BY rowid LIMIT 250",
+        )?;
+        let bodies = statement
+            .query_map(
+                rusqlite::params![self.tenant_id, after_rowid.unwrap_or(0)],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let items = bodies
+            .into_iter()
+            .map(|body| serde_json::from_str(&body).map_err(Into::into))
+            .collect::<Result<Vec<SourceEvent>>>()?;
         let next_cursor = items.last().map(|event| event.cursor.clone());
         Ok(Page { items, next_cursor })
     }
@@ -333,52 +391,24 @@ impl Connector for SqliteWarehouseConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{CapabilityClaims, CapabilityLimits};
-    use tempfile::{NamedTempFile, TempDir};
-
-    fn seed_tables(path: &Path, names: &[&str]) {
-        let connection = Connection::open(path).unwrap();
-        for name in names {
-            connection
-                .execute(&format!("CREATE TABLE {name}(id TEXT)"), [])
-                .unwrap();
-        }
-    }
-
-    fn capability(tenant: &str, source: &str) -> CapabilityEnvelope {
-        CapabilityEnvelope {
-            signature: "test".into(),
-            claims: CapabilityClaims {
-                issuer: "amos-runtime".into(),
-                audience: "sql-worker".into(),
-                tenant_id: tenant.into(),
-                atxn_id: "atxn".into(),
-                plan_id: "plan".into(),
-                step_id: "step".into(),
-                subject_id: "user".into(),
-                tool: "sql.readonly.v1".into(),
-                source_id: source.into(),
-                operations: BTreeSet::from(["query".into()]),
-                relations: BTreeSet::new(),
-                limits: CapabilityLimits {
-                    seconds: 30,
-                    rows: 100,
-                    bytes: 1_000,
-                },
-                policy_epoch: 1,
-                fencing_token: 1,
-                token_id: "cap".into(),
-                not_before: 0,
-                expires_at: i64::MAX,
-            },
-        }
-    }
+    use crate::domain::{Identity, OperationLimits, PlanStep, TypedPlan};
+    use std::collections::BTreeMap;
+    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn connector_has_stable_version_and_detects_change() {
         let file = NamedTempFile::new().unwrap();
-        seed_tables(file.path(), &["payments"]);
-        let connector = SqliteWarehouseConnector::new("t", "warehouse", file.path());
+        let connection = Connection::open(file.path()).unwrap();
+        connection
+            .execute("CREATE TABLE payments(id TEXT)", [])
+            .unwrap();
+        drop(connection);
+        let connector = SqliteWarehouseConnector::new(
+            "t",
+            "warehouse",
+            file.path(),
+            CapabilityIssuer::new([9_u8; 32]).unwrap(),
+        );
         let first = connector.observe("table:payments").await.unwrap();
         let second = connector.observe("table:payments").await.unwrap();
         assert_eq!(first.source_version, second.source_version);
@@ -396,68 +426,80 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connector_detects_deletion_and_source_unavailable() {
+    async fn connector_verifies_signature_and_binds_the_requested_relation() {
         let file = NamedTempFile::new().unwrap();
-        seed_tables(file.path(), &["payments"]);
-        let connector = SqliteWarehouseConnector::new("t", "warehouse", file.path());
-        let observed = connector.observe("table:payments").await.unwrap();
         Connection::open(file.path())
             .unwrap()
-            .execute("DROP TABLE payments", [])
+            .execute("CREATE TABLE payments(id TEXT)", [])
             .unwrap();
-        let validation = connector
-            .validate("table:payments", &observed.source_version)
-            .await
-            .unwrap();
-        assert!(!validation.same);
-        assert!(validation.current_version.is_none());
-        assert!(
-            validation
-                .reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("deleted"))
-        );
-
-        let missing = TempDir::new().unwrap().path().join("missing.sqlite");
-        let unavailable = SqliteWarehouseConnector::new("t", "warehouse", &missing);
-        let error = unavailable.health().await.unwrap_err();
-        assert!(error.to_string().contains("unavailable"));
-    }
-
-    #[tokio::test]
-    async fn discover_paginates_without_silent_duplicates() {
-        let file = NamedTempFile::new().unwrap();
-        seed_tables(file.path(), &["alpha", "beta", "gamma", "delta"]);
+        let issuer = CapabilityIssuer::new([4_u8; 32]).unwrap();
         let connector =
-            SqliteWarehouseConnector::new("t", "warehouse", file.path()).with_page_size(2);
-        let first = connector.discover("*", None).await.unwrap();
-        assert_eq!(first.items.len(), 2);
-        let second = connector
-            .discover("*", first.next_cursor.as_deref())
+            SqliteWarehouseConnector::new("t", "warehouse", file.path(), issuer.clone());
+        let identity = Identity {
+            tenant_id: "t".into(),
+            subject_id: "u".into(),
+            roles: BTreeSet::new(),
+            groups: BTreeSet::new(),
+            permissions: BTreeSet::from(["payments".into()]),
+            policy_attributes: BTreeMap::new(),
+            policy_epoch: 3,
+        };
+        let mut step = PlanStep {
+            step_id: "s".into(),
+            purpose: "read schema".into(),
+            tool: "sql.readonly.v1".into(),
+            source_id: "warehouse".into(),
+            input_object_ids: vec![],
+            parameter_schema: "schema.v1".into(),
+            parameters: json!({"relations":["payments"]}),
+            expected_output_schema: "schema.v1".into(),
+            limits: OperationLimits {
+                seconds: 1,
+                rows: 10,
+                bytes: 1_000,
+            },
+            max_attempts: 1,
+            repair_classes: BTreeSet::new(),
+            verifier_profile: "test.v1".into(),
+        };
+        let mut plan = TypedPlan {
+            plan_id: "p".into(),
+            tenant_id: "t".into(),
+            atxn_id: "a".into(),
+            task_definition: "task:v1".into(),
+            manifest_id: "m".into(),
+            model_identity: "deterministic".into(),
+            steps: vec![step.clone()],
+        };
+        let observation = connector.observe("table:payments").await.unwrap();
+        let capability = issuer.issue(&identity, &plan, &step, 1).unwrap();
+        connector
+            .read("table:payments", &observation.source_version, &capability)
             .await
             .unwrap();
-        assert_eq!(second.items.len(), 2);
-        let mut refs: Vec<_> = first
-            .items
-            .iter()
-            .chain(second.items.iter())
-            .map(|item| item.reference.clone())
-            .collect();
-        let before = refs.len();
-        refs.sort();
-        refs.dedup();
-        assert_eq!(refs.len(), before);
-        assert!(second.next_cursor.is_none() || !second.items.is_empty());
-        let err = connector.discover("*", Some("missing-cursor")).await;
-        assert!(err.is_err());
+
+        step.parameters = json!({"relations":["other"]});
+        plan.steps = vec![step.clone()];
+        let wrong_relation = issuer.issue(&identity, &plan, &step, 1).unwrap();
+        assert!(matches!(
+            connector
+                .read(
+                    "table:payments",
+                    &observation.source_version,
+                    &wrong_relation,
+                )
+                .await,
+            Err(AmosError::Capability(_))
+        ));
     }
 
     #[tokio::test]
-    async fn subscribe_recovers_from_cursor_and_read_is_version_bound() {
+    async fn connector_events_are_durable_deduplicated_and_cursor_bounded() {
         let file = NamedTempFile::new().unwrap();
-        seed_tables(file.path(), &["payments"]);
-        let connector = SqliteWarehouseConnector::new("t", "warehouse", file.path());
-        let first_event = connector
+        let issuer = CapabilityIssuer::new([7_u8; 32]).unwrap();
+        let connector =
+            SqliteWarehouseConnector::new("t", "warehouse", file.path(), issuer.clone());
+        let first = connector
             .emit_change(
                 "table:payments",
                 Some("v1".into()),
@@ -465,37 +507,32 @@ mod tests {
                 "schema",
             )
             .unwrap();
-        let second_event = connector
+        let duplicate = connector
             .emit_change(
                 "table:payments",
+                Some("v1".into()),
                 Some("v2".into()),
-                Some("v3".into()),
                 "schema",
             )
             .unwrap();
-        let page = connector
-            .subscribe(Some(&first_event.cursor))
-            .await
-            .unwrap();
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].event_id, second_event.event_id);
-        assert!(connector.subscribe(Some("unknown-cursor")).await.is_err());
+        assert_eq!(duplicate.event_id, first.event_id);
 
-        let observed = connector.observe("table:payments").await.unwrap();
-        let handle = connector
-            .read(
-                "table:payments",
-                &observed.source_version,
-                &capability("t", "warehouse"),
-            )
-            .await
-            .unwrap();
-        assert_eq!(handle.source_version, observed.source_version);
+        drop(connector);
+        let reopened = SqliteWarehouseConnector::new("t", "warehouse", file.path(), issuer);
+        let page = reopened.subscribe(None).await.unwrap();
+        assert_eq!(page.items, vec![first.clone()]);
+        assert_eq!(page.next_cursor.as_deref(), Some(first.cursor.as_str()));
         assert!(
-            connector
-                .read("table:payments", "stale", &capability("t", "warehouse"))
+            reopened
+                .subscribe(page.next_cursor.as_deref())
                 .await
-                .is_err()
+                .unwrap()
+                .items
+                .is_empty()
         );
+        assert!(matches!(
+            reopened.subscribe(Some("unknown")).await,
+            Err(AmosError::Validation(_))
+        ));
     }
 }

@@ -24,8 +24,8 @@ pub const WINDOW_END: &str = "2026-07-07T20:00:00Z";
 
 pub fn seed_demo(store: &Store, warehouse_path: &Path) -> Result<()> {
     seed_warehouse(warehouse_path)?;
-    let start = parse(WINDOW_START);
-    let end = parse(WINDOW_END);
+    let start = parse(WINDOW_START)?;
+    let end = parse(WINDOW_END)?;
     let common = BTreeSet::from(["analytics".into(), "payments".into()]);
     let objects = vec![
         memory(
@@ -39,7 +39,7 @@ pub fn seed_demo(store: &Store, warehouse_path: &Path) -> Result<()> {
             start,
             None,
             common.clone(),
-        ),
+        )?,
         memory(
             "schema:payment_events",
             MemoryType::Schema,
@@ -51,7 +51,7 @@ pub fn seed_demo(store: &Store, warehouse_path: &Path) -> Result<()> {
             start,
             None,
             common.clone(),
-        ),
+        )?,
         memory(
             "snapshot:payment_events:492",
             MemoryType::DataState,
@@ -63,7 +63,7 @@ pub fn seed_demo(store: &Store, warehouse_path: &Path) -> Result<()> {
             start,
             Some(end + Duration::minutes(15)),
             common.clone(),
-        ),
+        )?,
         memory(
             "policy:user:analyst",
             MemoryType::PermissionPolicy,
@@ -75,7 +75,7 @@ pub fn seed_demo(store: &Store, warehouse_path: &Path) -> Result<()> {
             start,
             None,
             common.clone(),
-        ),
+        )?,
         memory(
             "policy:review:payments",
             MemoryType::ReviewPolicy,
@@ -87,7 +87,7 @@ pub fn seed_demo(store: &Store, warehouse_path: &Path) -> Result<()> {
             start,
             None,
             common.clone(),
-        ),
+        )?,
         memory(
             "document:gateway_deploy",
             MemoryType::Document,
@@ -99,7 +99,7 @@ pub fn seed_demo(store: &Store, warehouse_path: &Path) -> Result<()> {
             start,
             None,
             common.clone(),
-        ),
+        )?,
         memory(
             "analysis:processor_b_retry",
             MemoryType::PriorAnalysis,
@@ -111,7 +111,7 @@ pub fn seed_demo(store: &Store, warehouse_path: &Path) -> Result<()> {
             start,
             None,
             BTreeSet::from(["analytics".into(), "payments".into(), "sre".into()]),
-        ),
+        )?,
     ];
     for object in objects {
         store.write_memory(&object)?;
@@ -175,7 +175,7 @@ fn memory(
     start: DateTime<Utc>,
     end: Option<DateTime<Utc>>,
     permissions: BTreeSet<String>,
-) -> MemoryObject {
+) -> Result<MemoryObject> {
     let mut object = MemoryObject::new(
         TENANT,
         key,
@@ -185,13 +185,29 @@ fn memory(
         source,
         version,
         authority,
-    );
+    )?;
     object.effective_start = Some(start);
     object.effective_end = end;
     object.permissions = permissions;
     object.version = version.into();
-    object.content_hash = content_hash(&object.content);
-    object
+    object.consistency_class = match memory_type {
+        MemoryType::DataState | MemoryType::StreamState
+            if object
+                .content
+                .get("consistency")
+                .and_then(|value| value.as_str())
+                == Some("C2") =>
+        {
+            ConsistencyClass::C2
+        }
+        MemoryType::SemanticDefinition
+        | MemoryType::Schema
+        | MemoryType::PermissionPolicy
+        | MemoryType::ReviewPolicy => ConsistencyClass::C1,
+        _ => ConsistencyClass::C0,
+    };
+    object.content_hash = content_hash(&object.content)?;
+    Ok(object)
 }
 
 pub fn seed_warehouse(path: &Path) -> Result<()> {
@@ -206,7 +222,8 @@ pub fn seed_warehouse(path: &Path) -> Result<()> {
     connection.execute_batch("CREATE TABLE payment_events(event_id TEXT PRIMARY KEY,event_time TEXT NOT NULL,processor TEXT NOT NULL,card_network TEXT NOT NULL,environment TEXT NOT NULL,is_test_account INTEGER NOT NULL,status TEXT NOT NULL,error_code TEXT);")?;
     let tx = connection.transaction()?;
     let mut rng = 42_u64;
-    let start = parse(WINDOW_START);
+    let start = parse(WINDOW_START)?;
+    let spike_start = parse(SPIKE_START)?;
     let mut offset = 0_u64;
     for minute in 0..720 {
         let time = start + Duration::minutes(minute);
@@ -231,7 +248,7 @@ pub fn seed_warehouse(path: &Path) -> Result<()> {
                 "production"
             };
             let mut rate = 20_u64;
-            if time >= parse(SPIKE_START) {
+            if time >= spike_start {
                 rate = 38;
                 if processor == "Processor B" && network == "Visa" {
                     rate = 158
@@ -269,8 +286,10 @@ pub fn seed_warehouse(path: &Path) -> Result<()> {
 fn lcg(value: u64) -> u64 {
     value.wrapping_mul(6364136223846793005).wrapping_add(1)
 }
-fn parse(value: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(value)
-        .expect("valid fixed timestamp")
-        .with_timezone(&Utc)
+fn parse(value: &str) -> Result<DateTime<Utc>> {
+    Ok(DateTime::parse_from_rfc3339(value)
+        .map_err(|error| {
+            crate::error::AmosError::Validation(format!("invalid demo fixture timestamp: {error}"))
+        })?
+        .with_timezone(&Utc))
 }

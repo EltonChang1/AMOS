@@ -1,6 +1,6 @@
 use std::{
-    cmp::Reverse,
-    collections::{BTreeMap, BTreeSet},
+    cmp::{Ordering, Reverse},
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
 use chrono::{DateTime, Utc};
@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Result,
     domain::{
-        Authority, ContextConflict, Identity, MemoryObject, MemoryStatus, MemoryType, content_hash,
-        new_id,
+        Authority, ContextConflict, Identity, MemoryObject, MemoryType, content_hash, new_id,
     },
     error::AmosError,
     policy::PolicyEngine,
@@ -50,10 +49,19 @@ impl MemoryService {
                 "memory requires logical key and source".into(),
             ));
         }
-        if object.content_hash != content_hash(&object.content) {
+        if object.content_hash != content_hash(&object.content)? {
             return Err(AmosError::Validation("memory content hash mismatch".into()));
         }
         self.store.write_memory(object)
+    }
+
+    pub fn list_visible(&self, identity: &Identity) -> Result<Vec<MemoryObject>> {
+        Ok(self
+            .store
+            .list_active_memory(&identity.tenant_id)?
+            .into_iter()
+            .filter(|object| self.policy.can_read_memory(identity, object))
+            .collect())
     }
 
     pub fn supersede(
@@ -85,32 +93,45 @@ impl MemoryService {
 
     pub fn retrieve(&self, identity: &Identity, query: &RetrieveQuery) -> Result<RetrievalResult> {
         let terms = terms(&query.task_text);
-        let mut visible: Vec<(i64, MemoryObject)> = self
-            .store
-            .list_active_memory(&identity.tenant_id)?
+        let fts_query = (!terms.is_empty()).then(|| {
+            terms
+                .iter()
+                .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        });
+        let candidate_limit = query.max_items.max(1).saturating_mul(8).min(2_000);
+        let candidates = self.store.retrieve_memory_candidates(
+            &identity.tenant_id,
+            &identity.permissions,
+            &query.required_types,
+            query.time_start,
+            query.time_end,
+            fts_query.as_deref(),
+            candidate_limit,
+        )?;
+        let max_items = query.max_items.max(1);
+        let mut top = BinaryHeap::with_capacity(max_items + 1);
+        for object in candidates
             .into_iter()
             .filter(|object| self.policy.can_read_memory(identity, object))
-            .filter(|object| {
-                object.status == MemoryStatus::Active && object.superseded_by.is_none()
-            })
-            .filter(|object| object.effective_at(query.time_start, query.time_end))
-            .filter(|object| {
-                query.required_types.is_empty()
-                    || query.required_types.contains(&object.memory_type)
-            })
-            .map(|object| (retrieval_score(&object, &terms), object))
-            .filter(|(score, _)| *score > 0 || terms.is_empty())
-            .collect();
-        visible.sort_by_key(|(score, object)| {
-            (
-                Reverse(*score),
-                Reverse(object.authority.rank()),
-                Reverse(object.recorded_at),
-            )
-        });
-        visible.truncate(query.max_items.max(1));
+        {
+            let score = retrieval_score(&object, &terms);
+            if score <= 0 && !terms.is_empty() {
+                continue;
+            }
+            top.push(Reverse(RankedMemory::new(score, object)));
+            if top.len() > max_items {
+                top.pop();
+            }
+        }
+        let mut visible = top
+            .into_iter()
+            .map(|Reverse(item)| item)
+            .collect::<Vec<_>>();
+        visible.sort_by(|left, right| right.cmp(left));
         Ok(RetrievalResult {
-            items: visible.into_iter().map(|(_, object)| object).collect(),
+            items: visible.into_iter().map(|item| item.object).collect(),
             warnings: vec![],
         })
     }
@@ -128,10 +149,9 @@ impl MemoryService {
         for ((_memory_type, logical_key), mut candidates) in groups {
             candidates
                 .sort_by_key(|item| (Reverse(item.authority.rank()), Reverse(item.recorded_at)));
-            let highest = candidates
-                .first()
-                .map(|item| item.authority.rank())
-                .unwrap_or_default();
+            let Some(highest) = candidates.first().map(|item| item.authority.rank()) else {
+                continue;
+            };
             let peers: Vec<_> = candidates
                 .iter()
                 .filter(|item| item.authority.rank() == highest)
@@ -176,7 +196,7 @@ impl MemoryService {
             "amos.compactor",
             new_id("v"),
             Authority::SystemObserved,
-        );
+        )?;
         compacted.permissions = items
             .iter()
             .flat_map(|item| item.permissions.iter().cloned())
@@ -191,8 +211,57 @@ impl MemoryService {
                 .join(","),
         );
         compacted.governing = false;
-        compacted.content_hash = content_hash(&compacted.content);
+        compacted.content_hash = content_hash(&compacted.content)?;
         Ok(compacted)
+    }
+}
+
+struct RankedMemory {
+    score: i64,
+    authority: u8,
+    recorded_at: i64,
+    object_id: String,
+    object: MemoryObject,
+}
+
+impl RankedMemory {
+    fn new(score: i64, object: MemoryObject) -> Self {
+        Self {
+            score,
+            authority: object.authority.rank(),
+            recorded_at: object.recorded_at.timestamp_micros(),
+            object_id: object.object_id.clone(),
+            object,
+        }
+    }
+
+    fn key(&self) -> (i64, u8, i64, Reverse<&str>) {
+        (
+            self.score,
+            self.authority,
+            self.recorded_at,
+            Reverse(self.object_id.as_str()),
+        )
+    }
+}
+
+impl PartialEq for RankedMemory {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for RankedMemory {}
+
+impl PartialOrd for RankedMemory {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RankedMemory {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key().cmp(&other.key())
     }
 }
 
@@ -225,7 +294,7 @@ trait MemoryTypeString {
 }
 impl MemoryTypeString for MemoryObject {
     fn memory_type_string(&self) -> String {
-        serde_json::to_string(&self.memory_type).unwrap_or_default()
+        format!("{:?}", self.memory_type)
     }
 }
 
@@ -261,7 +330,8 @@ mod tests {
             "semantic",
             "1",
             Authority::OwnerApproved,
-        );
+        )
+        .unwrap();
         public.permissions.insert("payments".into());
         let mut secret = public.clone();
         secret.object_id = new_id("mem");
@@ -284,5 +354,47 @@ mod tests {
             .unwrap();
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].logical_key, "metric:failure");
+    }
+
+    #[test]
+    fn retrieval_pushes_scope_filters_into_bounded_fts_candidates() {
+        let store = Store::in_memory().unwrap();
+        let service = MemoryService::new(store.clone(), PolicyEngine);
+        for index in 0_u64..500 {
+            let mut object = MemoryObject::new(
+                "t",
+                format!("document:{index}"),
+                MemoryType::Document,
+                format!("needle incident document {index}"),
+                json!({"body":format!("needle evidence {index}")}),
+                "documents",
+                index.to_string(),
+                Authority::SystemObserved,
+            )
+            .unwrap();
+            object.permissions = if index.is_multiple_of(2) {
+                BTreeSet::from(["payments".into()])
+            } else {
+                BTreeSet::from(["restricted".into()])
+            };
+            store.write_memory(&object).unwrap();
+        }
+        let result = service
+            .retrieve(
+                &identity(&["payments"]),
+                &RetrieveQuery {
+                    task_text: "needle incident".into(),
+                    required_types: BTreeSet::from([MemoryType::Document]),
+                    time_start: Utc::now() - Duration::days(1),
+                    time_end: Utc::now(),
+                    max_items: 7,
+                },
+            )
+            .unwrap();
+        assert_eq!(result.items.len(), 7);
+        assert!(result.items.iter().all(|object| {
+            object.memory_type == MemoryType::Document
+                && object.permissions == BTreeSet::from(["payments".into()])
+        }));
     }
 }

@@ -2,25 +2,36 @@ use std::{collections::BTreeSet, ops::ControlFlow};
 
 use chrono::Utc;
 use sqlparser::{
-    ast::{
-        BinaryOperator, Expr, FunctionArg, FunctionArgExpr, FunctionArguments, ObjectName, Query,
-        Select, SelectItem, SetExpr, Statement, Value, Visit, Visitor,
-    },
+    ast::{BinaryOperator, Expr, ObjectName, Query, Select, SelectItem, SetExpr, Visit, Visitor},
     dialect::GenericDialect,
     parser::Parser,
 };
 
 use crate::{
+    Result,
     domain::{
-        Claim, ContextManifest, DependencyEdge, Identity, Outcome, PlanStep, TaskDefinition,
-        VerificationCheck, VerificationRecord, content_hash, new_id,
+        Artifact, Claim, ContextManifest, DependencyEdge, ExecutionRecord, Identity, Outcome,
+        PlanStep, TaskDefinition, VerificationCheck, VerificationRecord, content_hash, stable_id,
     },
     policy::PolicyEngine,
+    workers::ChartWorker,
 };
 
 #[derive(Debug, Clone, Default)]
 pub struct Verifier {
     policy: PolicyEngine,
+}
+
+pub struct ClaimVerificationRequest<'a> {
+    pub tenant: &'a str,
+    pub atxn_id: &'a str,
+    pub profile: &'a str,
+    pub artifact: &'a Artifact,
+    pub manifest: &'a ContextManifest,
+    pub claims: &'a [Claim],
+    pub edges: &'a [DependencyEdge],
+    pub executions: &'a [ExecutionRecord],
+    pub verifications: &'a [VerificationRecord],
 }
 
 impl Verifier {
@@ -30,21 +41,34 @@ impl Verifier {
         definition: &TaskDefinition,
         manifest: &ContextManifest,
         step: &PlanStep,
-    ) -> VerificationRecord {
+    ) -> Result<VerificationRecord> {
         let mut checks = vec![];
         let mut warnings = vec![];
         let mut errors = vec![];
-        let relations = step
+        let declared_relations = step
             .parameters
             .get("relations")
-            .and_then(|v| v.as_array())
-            .map(|values| {
-                values
+            .and_then(|value| value.as_array());
+        let relations_are_valid = declared_relations.is_some_and(|values| {
+            !values.is_empty()
+                && values
                     .iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+                    .all(|value| value.as_str().is_some_and(|text| !text.trim().is_empty()))
+        });
+        let relations = declared_relations
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        record(
+            &mut checks,
+            "STEP_RELATIONS",
+            relations_are_valid
+                .then_some(())
+                .ok_or_else(|| "step must declare a non-empty string relation list".into()),
+            &mut errors,
+        );
         record(
             &mut checks,
             "TOOL_POLICY",
@@ -88,9 +112,37 @@ impl Verifier {
             .filter(|object| matches!(object.memory_type, crate::domain::MemoryType::Schema))
             .collect();
         let mut references = SchemaReferences::default();
-        if let Ok(statements) = &parsed {
-            let _ = statements.visit(&mut references);
+        if let Ok(statements) = &parsed
+            && statements.visit(&mut references).is_break()
+        {
+            errors.push("SQL schema reference traversal stopped unexpectedly".into());
         }
+        let allowed_functions =
+            BTreeSet::from(["count".to_string(), "substr".to_string(), "sum".to_string()]);
+        let unsupported_functions = references
+            .functions
+            .difference(&allowed_functions)
+            .cloned()
+            .collect::<Vec<_>>();
+        record(
+            &mut checks,
+            "SQL_SUPPORTED_SUBSET",
+            if sql.len() > 32 * 1024
+                || references.has_join
+                || references.has_cte
+                || references.has_set_operation
+                || references.has_subquery
+                || !unsupported_functions.is_empty()
+            {
+                Err(format!(
+                    "query uses unsupported SQL structure or functions: {}",
+                    unsupported_functions.join(",")
+                ))
+            } else {
+                Ok(())
+            },
+            &mut errors,
+        );
         let allowed_tables: BTreeSet<_> = schemas
             .iter()
             .filter_map(|schema| schema.content.get("table").and_then(|value| value.as_str()))
@@ -116,15 +168,10 @@ impl Verifier {
                 .as_object()?
                 .iter()
                 .find_map(|(old, new)| {
-                    references
-                        .identifiers
-                        .contains(&old.to_lowercase())
-                        .then(|| {
-                            format!(
-                                "COLUMN_SUPERSEDED:{old}:{}",
-                                new.as_str().unwrap_or_default()
-                            )
-                        })
+                    new.as_str()
+                        .filter(|replacement| !replacement.trim().is_empty())
+                        .filter(|_| normalized.contains(&normalize(old)))
+                        .map(|replacement| format!("COLUMN_SUPERSEDED:{old}:{replacement}"))
                 })
         });
         let unknown_table = references
@@ -135,6 +182,22 @@ impl Verifier {
             &mut checks,
             "SCHEMA_TABLES",
             unknown_table.map_or(Ok(()), |table| Err(format!("unknown table: {table}"))),
+            &mut errors,
+        );
+        let payment_events_used = references.relations.contains("payment_events");
+        record(
+            &mut checks,
+            "SQL_TIME_BOUNDS",
+            if !payment_events_used
+                || (references.has_time_lower_bound && references.has_time_upper_bound)
+            {
+                Ok(())
+            } else {
+                Err(
+                    "payment_events queries require parsed lower and upper event_time bounds"
+                        .into(),
+                )
+            },
             &mut errors,
         );
         let unknown_column =
@@ -261,8 +324,17 @@ impl Verifier {
         } else {
             Outcome::Pass
         };
-        VerificationRecord {
-            verification_id: new_id("ver"),
+        let input_hash = content_hash(step)?;
+        Ok(VerificationRecord {
+            verification_id: stable_id(
+                "ver",
+                &serde_json::json!({
+                    "tenant_id": identity.tenant_id,
+                    "atxn_id": manifest.atxn_id,
+                    "profile": definition.verifier_profile,
+                    "input_hash": input_hash,
+                }),
+            )?,
             tenant_id: identity.tenant_id.clone(),
             atxn_id: manifest.atxn_id.clone(),
             execution_id: None,
@@ -273,9 +345,9 @@ impl Verifier {
             warnings,
             errors,
             permitted_repair,
-            input_hash: content_hash(step),
+            input_hash,
             created_at: Utc::now(),
-        }
+        })
     }
 
     pub fn repair_step(&self, step: &PlanStep, repair: &str) -> Option<PlanStep> {
@@ -293,26 +365,106 @@ impl Verifier {
 
     pub fn verify_claims(
         &self,
-        tenant: &str,
-        atxn_id: &str,
-        profile: &str,
-        claims: &[Claim],
-        edges: &[DependencyEdge],
-    ) -> VerificationRecord {
+        request: &ClaimVerificationRequest<'_>,
+    ) -> Result<VerificationRecord> {
+        let tenant = request.tenant;
+        let atxn_id = request.atxn_id;
+        let profile = request.profile;
+        let artifact = request.artifact;
+        let manifest = request.manifest;
+        let claims = request.claims;
+        let edges = request.edges;
+        let executions = request.executions;
+        let verifications = request.verifications;
         let mut checks = vec![];
         let mut errors = vec![];
         let mut warnings = vec![];
+        let execution_ids = executions
+            .iter()
+            .map(|execution| (execution.execution_id.as_str(), execution))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let verification_ids = verifications
+            .iter()
+            .map(|verification| verification.verification_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let memory_ids = manifest
+            .selected_objects
+            .iter()
+            .map(|memory| memory.object_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut reference_errors = vec![];
+        let mut support_errors = vec![];
+        let mut numeric_errors = vec![];
         for claim in claims {
-            let relations: BTreeSet<_> = edges
+            if claim.tenant_id != tenant || claim.artifact_id != artifact.artifact_id {
+                reference_errors.push(format!(
+                    "claim {} crosses tenant or artifact scope",
+                    claim.claim_id
+                ));
+            }
+            let claim_edges = edges
                 .iter()
                 .filter(|edge| edge.from.id == claim.claim_id)
+                .collect::<Vec<_>>();
+            let relations: BTreeSet<_> = claim_edges
+                .iter()
                 .map(|edge| edge.relation.as_str())
                 .collect();
+            for edge in &claim_edges {
+                if edge.tenant_id != tenant
+                    || edge.from.endpoint_type != "claim"
+                    || (edge.to.endpoint_type == "execution"
+                        && !execution_ids.contains_key(edge.to.id.as_str()))
+                    || (edge.to.endpoint_type == "memory"
+                        && !memory_ids.contains(edge.to.id.as_str()))
+                {
+                    reference_errors.push(format!(
+                        "claim {} has an unresolved or cross-scope dependency {}",
+                        claim.claim_id, edge.edge_id
+                    ));
+                }
+            }
+            for execution_id in &claim.support_execution_ids {
+                let Some(execution) = execution_ids.get(execution_id.as_str()) else {
+                    reference_errors.push(format!(
+                        "claim {} references missing execution {execution_id}",
+                        claim.claim_id
+                    ));
+                    continue;
+                };
+                if execution.tenant_id != tenant
+                    || execution.atxn_id != atxn_id
+                    || !claim_edges.iter().any(|edge| {
+                        edge.relation == "computed_by"
+                            && edge.to.endpoint_type == "execution"
+                            && edge.to.id == *execution_id
+                    })
+                {
+                    reference_errors.push(format!(
+                        "claim {} execution {execution_id} is not bound by a computed_by edge",
+                        claim.claim_id
+                    ));
+                }
+            }
+            for verification_id in &claim.verification_ids {
+                if !verification_ids.contains(verification_id.as_str()) {
+                    reference_errors.push(format!(
+                        "claim {} references missing verification {verification_id}",
+                        claim.claim_id
+                    ));
+                }
+            }
             let numeric = matches!(
                 claim.claim_type.as_str(),
                 "metric_value" | "metric_comparison" | "concentration"
             );
             if numeric {
+                if claim.support_execution_ids.is_empty() || claim.verification_ids.is_empty() {
+                    reference_errors.push(format!(
+                        "numeric claim {} requires execution and verification references",
+                        claim.claim_id
+                    ));
+                }
                 let required = [
                     "computed_by",
                     "governed_by_metric",
@@ -321,23 +473,37 @@ impl Verifier {
                 ];
                 for relation in required {
                     if !relations.contains(relation) {
-                        errors.push(format!("claim {} missing {relation}", claim.claim_id));
+                        support_errors.push(format!("claim {} missing {relation}", claim.claim_id));
                     }
+                }
+                if let Err(error) = verify_numeric_claim(claim, &execution_ids) {
+                    numeric_errors.push(error);
                 }
             }
             if claim.claim_type == "operational_recommendation" || claim.claim_type == "causal" {
                 warnings.push(format!("claim {} requires human review", claim.claim_id));
             }
         }
-        checks.push(VerificationCheck {
-            rule_id: "CLAIM_SUPPORT".into(),
-            outcome: if errors.is_empty() {
-                Outcome::Pass
-            } else {
-                Outcome::Reject
-            },
-            message: None,
-        });
+        let chart_result = verify_chart_binding(artifact, executions);
+        record(
+            &mut checks,
+            "CLAIM_REFERENCES",
+            join_errors(&reference_errors),
+            &mut errors,
+        );
+        record(
+            &mut checks,
+            "CLAIM_SUPPORT",
+            join_errors(&support_errors),
+            &mut errors,
+        );
+        record(
+            &mut checks,
+            "NUMERIC_RECOMPUTATION",
+            join_errors(&numeric_errors),
+            &mut errors,
+        );
+        record(&mut checks, "CHART_DATA_BINDING", chart_result, &mut errors);
         checks.push(VerificationCheck {
             rule_id: "REVIEW_BOUNDARY".into(),
             outcome: if warnings.is_empty() {
@@ -354,22 +520,192 @@ impl Verifier {
         } else {
             Outcome::Pass
         };
-        VerificationRecord {
-            verification_id: new_id("ver"),
+        let input_hash = content_hash(&serde_json::json!({
+            "artifact": artifact,
+            "manifest_id": manifest.manifest_id,
+            "claims": claims,
+            "edges": edges,
+            "execution_hashes": executions.iter().map(|execution| {
+                (&execution.execution_id, &execution.output_hash)
+            }).collect::<Vec<_>>(),
+            "verification_ids": verifications.iter().map(|verification| {
+                &verification.verification_id
+            }).collect::<Vec<_>>(),
+        }))?;
+        Ok(VerificationRecord {
+            verification_id: stable_id(
+                "ver",
+                &serde_json::json!({
+                    "tenant_id": tenant,
+                    "atxn_id": atxn_id,
+                    "profile": profile,
+                    "input_hash": input_hash,
+                }),
+            )?,
             tenant_id: tenant.into(),
             atxn_id: atxn_id.into(),
             execution_id: None,
             verifier_profile: profile.into(),
-            profile_version: 1,
+            profile_version: 2,
             outcome,
             checks,
             warnings,
             errors,
             permitted_repair: None,
-            input_hash: content_hash(&claims),
+            input_hash,
             created_at: Utc::now(),
-        }
+        })
     }
+}
+
+fn join_errors(errors: &[String]) -> std::result::Result<(), String> {
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn verify_numeric_claim(
+    claim: &Claim,
+    executions: &std::collections::BTreeMap<&str, &ExecutionRecord>,
+) -> std::result::Result<(), String> {
+    let execution = claim
+        .support_execution_ids
+        .first()
+        .and_then(|execution_id| executions.get(execution_id.as_str()))
+        .ok_or_else(|| {
+            format!(
+                "claim {} has no durable supporting execution",
+                claim.claim_id
+            )
+        })?;
+    match claim.claim_type.as_str() {
+        "metric_comparison" => {
+            let rows = execution
+                .output
+                .as_array()
+                .ok_or_else(|| format!("claim {} supporting output is not rows", claim.claim_id))?;
+            let current = rows
+                .iter()
+                .find(|row| {
+                    row.get("period").and_then(serde_json::Value::as_str) == Some("current")
+                })
+                .ok_or_else(|| format!("claim {} has no current row", claim.claim_id))?;
+            let baseline = rows
+                .iter()
+                .find(|row| {
+                    row.get("period").and_then(serde_json::Value::as_str) == Some("baseline")
+                })
+                .ok_or_else(|| format!("claim {} has no baseline row", claim.claim_id))?;
+            let current_rate = recompute_rate(current, &claim.claim_id)?;
+            let baseline_rate = recompute_rate(baseline, &claim.claim_id)?;
+            let claimed_current = finite_number(&claim.payload, "current_value", &claim.claim_id)?;
+            let claimed_baseline =
+                finite_number(&claim.payload, "baseline_value", &claim.claim_id)?;
+            if (current_rate - claimed_current).abs() > 1e-12
+                || (baseline_rate - claimed_baseline).abs() > 1e-12
+            {
+                return Err(format!(
+                    "claim {} numeric values do not recompute from execution {}",
+                    claim.claim_id, execution.execution_id
+                ));
+            }
+            Ok(())
+        }
+        "concentration" => {
+            let first = execution
+                .output
+                .as_array()
+                .and_then(|rows| rows.first())
+                .ok_or_else(|| format!("claim {} concentration output is empty", claim.claim_id))?;
+            let rate = recompute_rate(first, &claim.claim_id)?;
+            let reported_rate = finite_number(first, "failure_rate", &claim.claim_id)?;
+            if &claim.payload != first || (rate - reported_rate).abs() > 1e-12 {
+                return Err(format!(
+                    "claim {} concentration payload does not match the top execution row",
+                    claim.claim_id
+                ));
+            }
+            Ok(())
+        }
+        "metric_value" => {
+            let value = finite_number(&claim.payload, "value", &claim.claim_id)?;
+            if value.is_finite() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "claim {} metric value is not finite",
+                    claim.claim_id
+                ))
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+fn recompute_rate(row: &serde_json::Value, claim_id: &str) -> std::result::Result<f64, String> {
+    let failures = row
+        .get("failures")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| format!("claim {claim_id} has no integer failures"))?;
+    let attempts = row
+        .get("attempts")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|attempts| *attempts > 0)
+        .ok_or_else(|| format!("claim {claim_id} has no positive integer attempts"))?;
+    if failures > attempts {
+        return Err(format!("claim {claim_id} failures exceed attempts"));
+    }
+    Ok(failures as f64 / attempts as f64)
+}
+
+fn finite_number(
+    value: &serde_json::Value,
+    field: &str,
+    claim_id: &str,
+) -> std::result::Result<f64, String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| format!("claim {claim_id} field {field} is not a finite number"))
+}
+
+fn verify_chart_binding(
+    artifact: &Artifact,
+    executions: &[ExecutionRecord],
+) -> std::result::Result<(), String> {
+    let timeseries = executions
+        .iter()
+        .find(|execution| execution.step_id == "timeseries")
+        .ok_or_else(|| "timeseries execution is missing".to_string())?;
+    let rows = timeseries
+        .output
+        .as_array()
+        .ok_or_else(|| "timeseries execution output is not rows".to_string())?;
+    let points = rows
+        .iter()
+        .map(|row| {
+            let hour = row
+                .get("hour")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "timeseries row has no hour".to_string())?;
+            let value = row
+                .get("failure_rate")
+                .and_then(serde_json::Value::as_f64)
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| "timeseries row has no finite failure rate".to_string())?;
+            Ok((hour.to_string(), value))
+        })
+        .collect::<std::result::Result<Vec<_>, String>>()?;
+    let (svg, hash) = ChartWorker
+        .timeseries_svg(&points)
+        .map_err(|error| error.to_string())?;
+    if !artifact.content.contains(&hash) || !artifact.content.contains(&svg) {
+        return Err("artifact chart is not bound to the timeseries execution data".into());
+    }
+    Ok(())
 }
 
 fn record(
@@ -510,7 +846,14 @@ struct SchemaReferences {
     relations: BTreeSet<String>,
     identifiers: BTreeSet<String>,
     aliases: BTreeSet<String>,
-    has_count_star: bool,
+    functions: BTreeSet<String>,
+    has_join: bool,
+    has_cte: bool,
+    has_set_operation: bool,
+    has_subquery: bool,
+    query_count: usize,
+    has_time_lower_bound: bool,
+    has_time_upper_bound: bool,
 }
 
 impl Visitor for SchemaReferences {
@@ -522,6 +865,7 @@ impl Visitor for SchemaReferences {
     }
 
     fn pre_visit_select(&mut self, select: &Select) -> ControlFlow<Self::Break> {
+        self.has_join |= select.from.iter().any(|table| !table.joins.is_empty());
         for item in &select.projection {
             if let SelectItem::ExprWithAlias { alias, .. } = item {
                 self.aliases.insert(alias.value.to_lowercase());
@@ -541,32 +885,50 @@ impl Visitor for SchemaReferences {
                 }
             }
             Expr::Function(function) => {
-                let name = function.name.to_string().to_lowercase();
-                if name == "count" {
-                    match &function.args {
-                        FunctionArguments::List(list)
-                            if list.args.iter().any(|arg| {
-                                matches!(
-                                    arg,
-                                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard)
-                                        | FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(
-                                            _
-                                        ))
-                                )
-                            }) =>
-                        {
-                            self.has_count_star = true;
-                        }
-                        FunctionArguments::None => {
-                            // COUNT without args is not a valid denominator form.
-                        }
-                        _ => {}
-                    }
+                self.functions
+                    .insert(function.name.to_string().to_lowercase());
+            }
+            Expr::Subquery(_) => {
+                self.has_subquery = true;
+            }
+            Expr::BinaryOp { left, op, right } => {
+                let left_is_time = expression_identifier(left).as_deref() == Some("event_time");
+                let right_is_time = expression_identifier(right).as_deref() == Some("event_time");
+                if left_is_time {
+                    self.has_time_lower_bound |=
+                        matches!(op, BinaryOperator::Gt | BinaryOperator::GtEq);
+                    self.has_time_upper_bound |=
+                        matches!(op, BinaryOperator::Lt | BinaryOperator::LtEq);
+                } else if right_is_time {
+                    self.has_time_lower_bound |=
+                        matches!(op, BinaryOperator::Lt | BinaryOperator::LtEq);
+                    self.has_time_upper_bound |=
+                        matches!(op, BinaryOperator::Gt | BinaryOperator::GtEq);
                 }
             }
             _ => {}
         }
         ControlFlow::Continue(())
+    }
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        self.query_count += 1;
+        if self.query_count > 1 {
+            self.has_subquery = true;
+        }
+        self.has_cte |= query.with.is_some();
+        self.has_set_operation |= matches!(query.body.as_ref(), SetExpr::SetOperation { .. });
+        ControlFlow::Continue(())
+    }
+}
+
+fn expression_identifier(expression: &Expr) -> Option<String> {
+    match expression {
+        Expr::Identifier(identifier) => Some(identifier.value.to_lowercase()),
+        Expr::CompoundIdentifier(identifiers) => identifiers
+            .last()
+            .map(|identifier| identifier.value.to_lowercase()),
+        _ => None,
     }
 }
 

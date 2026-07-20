@@ -10,16 +10,17 @@ pub fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", Uuid::now_v7().simple())
 }
 
-pub fn content_hash<T: Serialize>(value: &T) -> String {
-    match serde_json::to_vec(value) {
-        Ok(bytes) => format!("sha256:{}", hex::encode(Sha256::digest(bytes))),
-        Err(error) => format!(
-            "sha256:{}",
-            hex::encode(Sha256::digest(
-                format!(r#"{{"__amos_serialization_failure":"{error}"}}"#).into_bytes()
-            ))
-        ),
-    }
+pub fn content_hash<T: Serialize>(value: &T) -> crate::Result<String> {
+    let bytes = serde_json::to_vec(value)?;
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(bytes))))
+}
+
+pub fn stable_id<T: Serialize>(prefix: &str, value: &T) -> crate::Result<String> {
+    let digest = content_hash(value)?;
+    let hex = digest
+        .strip_prefix("sha256:")
+        .ok_or_else(|| crate::AmosError::Validation("invalid content hash prefix".into()))?;
+    Ok(format!("{prefix}_{}", &hex[..32]))
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -88,6 +89,8 @@ pub struct MemoryObject {
     pub external_ref: Option<String>,
     pub source_id: String,
     pub source_version: String,
+    #[serde(default)]
+    pub consistency_class: ConsistencyClass,
     pub authority: Authority,
     pub effective_start: Option<DateTime<Utc>>,
     pub effective_end: Option<DateTime<Utc>>,
@@ -114,9 +117,9 @@ impl MemoryObject {
         source_id: impl Into<String>,
         source_version: impl Into<String>,
         authority: Authority,
-    ) -> Self {
-        let content_hash = content_hash(&content);
-        Self {
+    ) -> crate::Result<Self> {
+        let content_hash = content_hash(&content)?;
+        Ok(Self {
             tenant_id: tenant_id.into(),
             object_id: new_id("mem"),
             logical_key: logical_key.into(),
@@ -126,6 +129,7 @@ impl MemoryObject {
             external_ref: None,
             source_id: source_id.into(),
             source_version: source_version.into(),
+            consistency_class: ConsistencyClass::C0,
             authority,
             effective_start: None,
             effective_end: None,
@@ -139,7 +143,7 @@ impl MemoryObject {
             provenance_ref: None,
             content_hash,
             governing: true,
-        }
+        })
     }
 
     pub fn effective_at(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> bool {
@@ -159,9 +163,10 @@ pub struct Identity {
     pub policy_epoch: u64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ConsistencyClass {
+    #[default]
     C0,
     C1,
     C2,
@@ -331,6 +336,17 @@ pub struct ContextConflict {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextRankingEntry {
+    pub role: String,
+    pub object_id: String,
+    pub authority_rank: u8,
+    pub consistency_class: ConsistencyClass,
+    pub relevance_score: u64,
+    pub selected: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContextManifest {
     pub manifest_id: String,
     pub tenant_id: String,
@@ -342,6 +358,8 @@ pub struct ContextManifest {
     pub omissions: Vec<ContextOmission>,
     pub conflicts: Vec<ContextConflict>,
     pub token_count: usize,
+    pub tokenizer: String,
+    pub ranking_trace: Vec<ContextRankingEntry>,
     pub source_versions: BTreeMap<String, String>,
     pub selected_objects: Vec<MemoryObject>,
     pub warnings: Vec<String>,
@@ -609,6 +627,8 @@ pub struct Review {
     pub review_id: String,
     pub tenant_id: String,
     pub artifact_id: String,
+    pub idempotency_key: String,
+    pub request_hash: String,
     pub claim_ids: Vec<String>,
     pub reviewer_id: String,
     pub decision: ReviewDecision,
@@ -644,6 +664,41 @@ pub struct AuditEvent {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetentionRecord {
+    pub tenant_id: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub retained_until: DateTime<Utc>,
+    pub legal_hold: bool,
+    pub reason: String,
+    pub updated_by: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetentionCommand {
+    pub target_type: String,
+    pub target_id: String,
+    pub retained_until: DateTime<Utc>,
+    pub legal_hold: bool,
+    pub reason: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ErasureReceipt {
+    pub receipt_id: String,
+    pub tenant_id: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub erased_content_hash: String,
+    pub affected_claim_ids: Vec<String>,
+    pub idempotency_key: String,
+    pub requested_by: String,
+    pub erased_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OutboxEvent {
     pub tenant_id: String,
@@ -654,6 +709,25 @@ pub struct OutboxEvent {
     pub payload: Value,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub state: OutboxState,
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub fencing_token: u64,
+    pub lease_owner: Option<String>,
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    pub next_attempt_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboxState {
+    #[default]
+    Ready,
+    Running,
+    RetryWait,
+    Delivered,
+    DeadLetter,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -682,6 +756,32 @@ pub struct Job {
     pub lease_expires_at: Option<DateTime<Utc>>,
     pub next_run_at: DateTime<Utc>,
     pub dead_letter_reason: Option<String>,
+}
+
+impl Job {
+    pub fn ready(
+        tenant_id: impl Into<String>,
+        job_type: impl Into<String>,
+        payload: Value,
+        idempotency_key: impl Into<String>,
+        max_attempts: u32,
+    ) -> Self {
+        Self {
+            job_id: new_id("job"),
+            tenant_id: tenant_id.into(),
+            job_type: job_type.into(),
+            payload,
+            idempotency_key: idempotency_key.into(),
+            state: JobState::Ready,
+            attempt: 0,
+            max_attempts,
+            fencing_token: 0,
+            lease_owner: None,
+            lease_expires_at: None,
+            next_run_at: Utc::now(),
+            dead_letter_reason: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -738,18 +838,43 @@ pub struct RunResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayComparisonKind {
+    Exact,
+    Equivalent,
+    Different,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplayExecutionComparison {
+    pub step_id: String,
+    pub original_execution_id: String,
+    pub replay_execution_id: String,
+    pub expected_output_hash: String,
+    pub actual_output_hash: String,
+    pub comparison: ReplayComparisonKind,
+    pub explanation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReplayResult {
     pub artifact_id: String,
+    pub original_atxn_id: String,
+    pub replay_atxn_id: String,
     pub status: Outcome,
     pub matching_execution_ids: Vec<String>,
     pub changed_execution_ids: Vec<String>,
+    pub comparisons: Vec<ReplayExecutionComparison>,
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
 }
 
 #[cfg(test)]
 mod tests {
+    use serde::Serialize;
+
     use super::AtxnState::*;
+    use super::content_hash;
 
     #[test]
     fn state_machine_matches_normative_contract() {
@@ -759,5 +884,23 @@ mod tests {
         assert!(Published.can_transition(RevocationPending));
         assert!(!Published.can_transition(Executing));
         assert!(!Rejected.can_transition(Admitted));
+    }
+
+    #[test]
+    fn content_hash_returns_serialization_errors() {
+        struct SerializationFails;
+
+        impl Serialize for SerializationFails {
+            fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom(
+                    "intentional serialization failure",
+                ))
+            }
+        }
+
+        assert!(content_hash(&SerializationFails).is_err());
     }
 }

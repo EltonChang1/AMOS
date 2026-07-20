@@ -1,0 +1,640 @@
+\clearpage
+\section{Current Rust Implementation Model}
+
+\subsection{Audit Baseline and Scope}
+
+This appendix is descriptive of the Rust working tree completed on 2026-07-19; Specifications A--F remain normative. The crate uses Rust 2024 and exposes library and binary targets at version 0.2.0. All 236 declarations in the original audited inventory remain present or are intentionally superseded by the recovery, migration, dispatch, retention, publication, observability, and bounded-execution APIs described below; new declarations were added without deleting a documented production contract. Generated derives, dependency code, constants, benchmarks, and test-only helpers are not counted as production functions.
+
+The executable boundary is deliberately small. \code{lib.rs} declares 17 modules and re-exports the runtime/configuration pair and the error/result pair. No model SDK is linked. Axum owns HTTP transport; Rusqlite owns local control and warehouse adapters; Sqlparser supplies a dialect-neutral AST; Tokio supplies the asynchronous server shell and bounded blocking lane; HMAC-SHA-256 signs capabilities; SHA-256 hashes content; UUIDv7 supplies time-ordered identifiers. Filesystem object promotion and operational counters are isolated in \code{publication} and \code{observability}.
+
+\subsection{Complete Public Type Inventory}
+
+\begin{longtable}{L{0.29\linewidth}L{0.63\linewidth}}
+\toprule
+\textbf{Type} & \textbf{Purpose and contract} \\
+\midrule
+\endhead
+\idcode{api::AppState} & Shared Axum state containing an atomic runtime reference and an identity-provider port; fields are private so routes cannot replace authorization state. \\
+\idcode{auth::IdentityProvider} & Thread-safe bearer-authentication port. Production embeds an enterprise implementation; transport code depends only on this trait. \\
+\idcode{auth::StaticIdentityProvider} & Immutable token-to-identity map used only by explicit demo mode. \\
+\idcode{connectors::EntityRef} & Source-qualified discovery result: source ID, reference, and entity type. \\
+\idcode{connectors::Page<T>} & Cursor page containing typed items and an optional next cursor. \\
+\idcode{connectors::Validation} & Revalidation result with equality flag, current version, and optional reason. \\
+\idcode{connectors::BoundedHandle} & Capability-scoped, version-bound source content and hash. \\
+\idcode{connectors::Connector} & Async source port for discovery, observation, bounded reads, revalidation, subscriptions, and health. \\
+\idcode{connectors::SqliteWarehouseConnector} & Reproducible local warehouse adapter with fixed tenant/source scope and a durable, deduplicated, 250-item cursor event inbox in the warehouse database. \\
+\idcode{context::ContextCompiler} & Service that compiles permitted memory into required-role coverage, optional evidence, versions, omissions, conflicts, and token accounting. \\
+\idcode{domain::MemoryType} & Fourteen memory categories: active context, data/stream/schema/semantic/document state, prior work, feedback, policy, execution, artifact, claim, and provenance. \\
+\idcode{domain::Authority} & Ordered trust tier from untrusted external through owner approved. Authority resolves conflicts but never grants access. \\
+\idcode{domain::MemoryStatus} & Staging, active, superseded, revoked, rejected, pending-review, and tombstoned lifecycle states. \\
+\idcode{domain::MemoryObject} & Full governed-memory record: tenant/object/logical identity; type; summary/content/reference; source/version; authority; effective and recorded time; permissions/sensitivity; lifecycle; supersession; provenance; hash; governing flag. \\
+\idcode{domain::Identity} & Tenant-bound subject with roles, groups, permission labels, policy attributes, and immutable policy epoch for a request. \\
+\idcode{domain::ConsistencyClass} & C0 best effort, C1 revalidated observation, and C2 reconstructible snapshot contract. \\
+\idcode{domain::RiskClass} & Exploratory, internal, material-internal, external, and regulated task risk. \\
+\idcode{domain::Budgets} & Context items/tokens, steps/repairs, and worker row/byte/second limits. \\
+\idcode{domain::TaskDefinition} & Versioned task policy: roles, consistency, tools, claim types, verifier/publication profiles, budgets, artifact schema, and effective interval. \\
+\idcode{domain::AtxnState} & Twenty explicit analytical-transaction states from admission through evidence, object finalization, publication, review, rejection, abort, and revocation. \\
+\idcode{domain::Outcome} & Pass, warning, repair, needs-review, reject, or abort. \\
+\idcode{domain::AnalyticalTransaction} & Durable request identity, task/risk/budget/policy snapshot, source version vector, CAS state sequence, terminal flag, outcome, warnings/errors, and timestamps. \\
+\idcode{domain::ContextOmission} & Optional role and safe omission reason. \\
+\idcode{domain::ContextConflict} & Logical key, conflicting object IDs, and conflict reason. \\
+\idcode{domain::ContextManifest} & Immutable compiler output containing role coverage, selected objects, omissions/conflicts, token count, source versions, and warnings. \\
+\idcode{domain::OperationLimits} & Per-step seconds, row, and byte bounds. \\
+\idcode{domain::PlanStep} & Tool step with purpose, source, input object IDs, parameter/output schemas, parameters, limits, attempts, repair classes, and verifier profile. \\
+\idcode{domain::TypedPlan} & Tenant/\atxn/task/manifest-bound list of steps and planner identity. \\
+\idcode{domain::CapabilityLimits} & Signed seconds, row, and byte bounds copied from a plan step. \\
+\idcode{domain::CapabilityClaims} & Signed issuer/audience, tenant/\atxn/plan/step/subject/tool/source scope, operations/relations, limits, policy epoch, fence, token ID, and validity interval. \\
+\idcode{domain::CapabilityEnvelope} & Capability claims plus URL-safe HMAC signature. \\
+\idcode{domain::ExecutionRecord} & Tool/version/capability, parameters and hash, input versions, output and hash, resource counts, latency, fence, status, and timestamp. \\
+\idcode{domain::VerificationCheck} & Stable verifier rule ID, outcome, and optional safe message. \\
+\idcode{domain::VerificationRecord} & Versioned profile result with checks, warnings/errors, optional bounded repair, input hash, and creation time. \\
+\idcode{domain::SqlPreflight} & Ephemeral context manifest ID, referenced source versions, and proposed-step verification. \\
+\idcode{domain::PublicationValidity} & Draft, valid-at-publication, publication-failed, or revoked. \\
+\idcode{domain::SemanticValidity} & Current, pending-revalidation, stale, or invalid. \\
+\idcode{domain::PolicyVisibility} & Allowed, redacted, or denied. \\
+\idcode{domain::ReplayAvailability} & Levels 0--4 plus degraded or expired. \\
+\idcode{domain::ReviewState} & Unreviewed, needs-review, verified, approved, corrected, or rejected. \\
+\idcode{domain::SupersessionState} & Active, superseded, or tombstoned. \\
+\idcode{domain::Claim} & Typed text/payload with risk, execution/verification support, and six independent validity dimensions. \\
+\idcode{domain::EdgeEndpoint} & Typed dependency-graph endpoint ID. \\
+\idcode{domain::DependencyEdge} & Claim support edge with relation, optional source version, creating \atxn, and integrity hash. \\
+\idcode{domain::Artifact} & Tenant/\atxn-bound rendered object with type/title/content/hash, audience/risk, object state, and publication validity. \\
+\idcode{domain::ReplayPackage} & Replay level, manifest/plan/execution IDs, template/config hash, retention deadline, expected hashes, and source versions. \\
+\idcode{domain::ReviewDecision} & Approve, reject, or correct. \\
+\idcode{domain::Review} & Idempotent reviewer command, scoped claims, decision/comment/correction, authority, effective time, mutation assertion, and request hash. \\
+\idcode{domain::ReviewResult} & Review plus resulting transaction, artifact, and claim states. \\
+\idcode{domain::AuditEvent} & Append-only actor/action/target, request/\atxn correlation, outcome, policy epoch, details, and time. \\
+\idcode{domain::OutboxEvent} & Tenant-scoped event identity/type/aggregate/idempotency key, payload, and delivery timestamps. \\
+\idcode{domain::JobState} & Ready, running, retry-wait, complete, dead-letter, or cancelled. \\
+\idcode{domain::Job} & Durable work identity/payload/key, attempt budget, monotonically increasing fence, lease owner/expiry, schedule, and dead-letter reason. \\
+\idcode{domain::SourceObservation} & Versioned source observation with effective time, freshness, classification, permissions, consistency, and retention deadline. \\
+\idcode{domain::SourceEvent} & Source change with before/after version, kind, occurrence/observation time, cursor, and deduplication key. \\
+\idcode{domain::ConnectorHealth} & Source status, lag, rate-limit remainder, and degraded capabilities. \\
+\idcode{domain::RunResult} & Complete vertical-slice result: transaction, manifest, plan, executions, verifications, artifact, claims, dependencies, and replay package. \\
+\idcode{domain::ReplayResult} & Artifact, outcome, matching/changed execution IDs, warnings, and errors. \\
+\idcode{error::Result<T>} & Crate-wide result alias using \code{AmosError}. \\
+\idcode{error::AmosError} & Stable internal taxonomy for not-found, authentication/authorization, conflict/validation/context/state/idempotency/capability, connector/execution, storage, and serialization failures. \\
+\idcode{evidence::EvidenceService} & Policy-aware edge construction, atomic human feedback, and invalidation entry service. \\
+\idcode{memory::RetrieveQuery} & Request text, required types, effective-time window, and candidate cap. \\
+\idcode{memory::RetrievalResult} & Ordered visible objects plus safe warnings. \\
+\idcode{memory::MemoryService} & Policy-aware memory write, list, supersession, retrieval, reconciliation, and compaction service. \\
+\idcode{policy::PolicyEngine} & Stateless typed authorization rules for current MVP resources and actions. \\
+\idcode{runtime::RuntimeConfig} & Control/warehouse paths plus private capability key; custom debug formatting redacts the key. \\
+\idcode{runtime::AmosRuntime} & Composition root containing store, policy, memory, context, connector, verifier, workers, evidence, scheduler, and orchestration. \\
+\idcode{scheduler::Scheduler} & High-level durable job API over the store. \\
+\idcode{store::Store} & Cloneable local persistence adapter sharing a mutex-protected SQLite connection. \\
+\idcode{verification::Verifier} & Policy, SQL-AST, schema, metric, freshness, repair, and claim-support verifier. \\
+\idcode{workers::CapabilityIssuer} & HMAC capability issuer/validator with a minimum 256-bit secret. \\
+\idcode{workers::SqlWorker} & Read-only SQLite query worker bound to capabilities and plan fences. \\
+\idcode{workers::StatisticsWorker} & Deterministic built-in statistical transformations. \\
+\idcode{workers::ChartWorker} & Deterministic SVG chart generator with content hashing. \\
+\idcode{domain::ContextRankingEntry} & Per-candidate role, score, consistency, selection, and omission reason frozen in the manifest. \\
+\idcode{domain::ReplayComparisonKind} & Exact, semantically equivalent, or different replay classification. \\
+\code{domain::ReplayExecution}\newline\code{Comparison} & Original/replay execution IDs, expected/actual hashes, classification, and explanation for one step. \\
+\idcode{domain::OutboxState} & Ready, running, retry-wait, delivered, or dead-letter durable delivery lifecycle. \\
+\idcode{domain::RetentionRecord} & Tenant/target deadline, legal-hold flag, reason, actor, and update time. \\
+\idcode{domain::RetentionCommand} & Transport-independent retention mutation with explicit idempotency key. \\
+\idcode{domain::ErasureReceipt} & Content-hash proof, affected claim IDs, actor, command key, and completion time without erased content. \\
+\idcode{workers::ExecutionCancellation} & Cloneable atomic cancellation handle consumed by the SQLite progress callback. \\
+\idcode{scheduler::OutboxDestination} & Synchronous idempotent destination port for one leased event. \\
+\idcode{scheduler::OutboxDispatcher} & Bounded leased delivery loop with retry/dead-letter completion and shutdown support. \\
+\idcode{observability::OperationalMetrics} & Lock-free tenant-safe task/recovery counters and fixed latency buckets. \\
+\idcode{observability::MetricsSnapshot} & Serializable administrator-facing point-in-time metric values and bucket bounds. \\
+\idcode{publication::PromotedObject} & Stable key, local path, verified hash, and byte count for a finalized object. \\
+\idcode{publication::ObjectStore} & Stage, promote, and read-back port with expected-hash enforcement. \\
+\code{publication::}\newline\code{LocalFilesystem}\newline\code{ObjectStore} & Fsyncing, mode-restricted, path-safe, atomic local object adapter with lost-ack idempotency. \\
+\bottomrule
+\caption{Public type, trait, and alias declarations, including completion-pass additions.}
+\end{longtable}
+
+Private transport and persistence types remain deliberately narrow:
+\begin{itemize}
+  \item \code{TaskRequest} and \code{TaskForm} deserialize task inputs;
+  \item \code{ReviewRequest} and \code{ReviewWithArtifactRequest} deserialize review inputs;
+  \item \code{MemorySearchRequest}, \code{VerifySqlRequest}, and \code{CursorQuery} cover search, verification, and cursor paging;
+  \item \code{ReplayRequest}, \code{ErasureRequest}, \code{Limit}, \code{JobRequest}, and \code{SourceCursor} deserialize the remaining API inputs;
+  \item \code{RequestIds} carries validated request and correlation identifiers; \code{Cli} and \code{Command} define the binary;
+  \item \code{ErrorEnvelope} and \code{ErrorBody} serialize safe failures; \code{InvalidationReceipt} provides idempotent impact receipts; and \code{SchemaReferences} collects SQL AST relations, identifiers, and aliases.
+\end{itemize}
+
+\subsection{Exact Local Persistence Schema}
+
+\begin{longtable}{L{0.24\linewidth}L{0.68\linewidth}}
+\toprule
+\textbf{Table} & \textbf{Indexed columns and invariant} \\
+\midrule
+\endhead
+\code{memory\_objects} & Composite tenant/object primary key; immutable unique source/logical/version identity; indexed scope, effective interval, source version, and supersession. Full typed body is JSON. \\
+\code{task\_definitions} & Tenant/task/version primary key; approved definitions are selected by greatest version. \\
+\code{atxn\_transactions} & Tenant/\atxn primary key; tenant/idempotency unique key; indexed state/time; scalar state sequence and terminal flag drive CAS. \\
+\code{context\_manifests} & Tenant/manifest primary key with \atxn identity and immutable JSON body. \\
+\code{plans} & Tenant/plan primary key with \atxn identity and immutable JSON body. \\
+\code{executions} & Tenant/execution primary key; unique tenant/\atxn/step/fence effect; output hash and fence are scalar columns. \\
+\code{verification\_records} & Tenant/verification primary key; \atxn and outcome columns support inspection. \\
+\code{artifacts} & Tenant/artifact primary key; \atxn, content hash, publication validity, and validity sequence. \\
+\code{claims} & Tenant/claim primary key; artifact and all six validity dimensions are indexed/queryable; validity sequence supports change tracking. \\
+\code{dependency\_edges} & Tenant/edge primary key with source and target reverse indexes. \\
+\code{replay\_packages} & Tenant/package primary key and unique tenant/artifact mapping; retained-until column. \\
+\code{replay\_comparisons} & Tenant/replay-\atxn primary key with artifact/status index and immutable comparison body. \\
+\code{reviews} & Tenant/review primary key and unique tenant/idempotency key; request hash rejects conflicting reuse. \\
+\idcode{invalidation_receipts} & Tenant/deduplication primary key; request hash makes source-event processing idempotent. \\
+\code{audit\_events} & Tenant/event primary key; tenant/created-time index; append-only JSON evidence. \\
+\code{retention\_records} & Tenant/type/target primary key with deadline/legal-hold due index. \\
+\code{erasure\_receipts} & Tenant/receipt primary key and unique tenant/idempotency proof. \\
+\code{outbox\_events} & Tenant/event primary key and unique event idempotency key; pending index over tenant/completion/creation. \\
+\code{jobs} & Tenant/job primary key and unique enqueue idempotency key; ready index over tenant/state/schedule/lease expiry. \\
+\code{schema\_migrations} & Forward-only version primary key, unique name, checksum, and applied timestamp. \\
+\code{memory\_fts} & FTS5 virtual table keyed to memory row IDs for bounded lexical candidate generation. \\
+\bottomrule
+\caption{Current SQLite control-plane tables.}
+\end{longtable}
+
+\subsection{Transport and CLI Surface}
+
+The router registers 30 paths. \code{/health} and \code{/v1/openapi.json} are public. Protected HTML paths are \code{/}, \code{/memory}, \code{/reviews}, \code{/operations}, and \code{/ui/tasks}. Protected API paths are task and transaction lookup; artifact list/cursor page/detail/replay/revalidation/review; claim detail; memory list/write/search/supersession; SQL preflight; audit; metrics; retention/erasure; jobs; connector health; and source-event processing. Replay and review each have a canonical artifact-scoped path plus a compatibility alias. Successful v1 calls retain their original typed-resource shapes for compatibility; request/correlation metadata is carried in headers and failures use the stable error envelope.
+
+\begin{longtable}{L{0.36\linewidth}L{0.18\linewidth}L{0.38\linewidth}}
+\toprule
+\textbf{Path} & \textbf{Method/access} & \textbf{Handler and result} \\
+\midrule
+\endhead
+\idcode{/health} & GET, public & \code{health}: liveness/version JSON. \\
+\idcode{/v1/openapi.json} & GET, public & \code{openapi}: OpenAPI 3.1 contract JSON. \\
+\idcode{/} & GET, authenticated & \code{workspace}: Analysis Workspace HTML. \\
+\idcode{/memory} & GET, authenticated & \code{memory\_studio}: visible memory HTML. \\
+\idcode{/reviews} & GET, reviewer & \code{review\_queue}: visible review work HTML. \\
+\idcode{/operations} & GET, administrator & \code{operations\_console}: audit HTML. \\
+\idcode{/ui/tasks} & POST, authenticated & \code{run\_task\_form}: run and render a task. \\
+\idcode{/v1/tasks} & POST, authenticated & \code{run\_task}: typed run result. \\
+\path|/v1/tasks/{id}| & GET, owner/reviewer & \code{get\_transaction}: lifecycle record. \\
+\path|/v1/transactions/{id}| & GET, owner/reviewer & Alias of \code{get\_transaction}. \\
+\idcode{/v1/artifacts} & GET, owner/reviewer & \code{list\_artifacts}: visible artifact page. \\
+\idcode{/v1/artifacts/page} & GET, owner/reviewer & \code{list\_artifacts\_page}: opaque cursor page. \\
+\path|/v1/artifacts/{id}| & GET, owner/reviewer & \code{get\_artifact}: artifact/claims/edges. \\
+\path|/v1/artifacts/{id}/replay| & POST, owner/reviewer & \code{replay}: output-hash comparison. \\
+\path|/v1/replay/{id}| & POST, owner/reviewer & Compatibility alias of \code{replay}. \\
+\path|/v1/artifacts/{id}/revalidate| & POST, reviewer & \code{revalidate}: validity changes. \\
+\path|/v1/artifacts/{id}/reviews| & POST, reviewer & \code{review}: artifact-scoped decision. \\
+\idcode{/v1/reviews} & POST, reviewer & \code{review\_with\_artifact}: body-scoped alias. \\
+\path|/v1/claims/{id}| & GET, owner/reviewer & \code{get\_claim}: claim and support. \\
+\idcode{/v1/memory} & GET/POST, authenticated & \code{list\_memory}/\code{write\_memory}. \\
+\idcode{/v1/memory/search} & POST, authenticated & \code{search\_memory}: governed retrieval. \\
+\path|/v1/memory/{id}/supersede| & POST, authorized writer & \code{supersede\_memory}: append replacement. \\
+\idcode{/v1/verify/sql} & POST, authenticated & \code{verify\_sql}: typed preflight. \\
+\idcode{/v1/audit} & GET, administrator & \code{audit}: bounded tenant audit. \\
+\idcode{/v1/metrics} & GET, administrator & \code{metrics}: bounded operational snapshot. \\
+\idcode{/v1/retention} & POST, administrator & \code{set\_retention}: idempotent deadline/legal hold. \\
+\path|/v1/retention/memory/{id}/erase| & POST, administrator & \code{erase\_memory}: due non-held erasure proof. \\
+\idcode{/v1/jobs} & GET/POST, administrator & \code{list\_jobs}/\code{enqueue\_job}. \\
+\idcode{/v1/connectors/health} & GET, administrator & \code{connector\_health}: source status. \\
+\idcode{/v1/source-events/process} & POST, administrator & \code{process\_source\_events}: impact map. \\
+\bottomrule
+\caption{Exact route registration, authorization, and handler map.}
+\end{longtable}
+
+The binary accepts \code{--root}, requires explicit \code{--demo} or \code{AMOS\_DEMO=true}, and implements the \code{seed}, \code{serve}, \code{run}, and \code{replay} commands. Serve accepts port and seed-demo flags; run accepts request and identity; replay requires artifact and idempotency-key values and accepts identity. Without demo mode the binary fails before initializing storage because no production identity provider is embedded.
+
+\clearpage
+\section{Foundational Function Reference}
+
+Each row names the owning type where Rust permits the same function name in several implementations. ``Reads/writes'' describes durable or external side effects; pure constructors and helpers have none. Complexity statements are stated where they affect design; all errors use the taxonomy in \code{AmosError}.
+
+This appendix covers domain, authentication, error, policy, memory, and context functions. Appendix~K continues with runtime, HTTP, persistence, connector, worker, and verifier functions. Together the two appendices preserve the original 236-declaration audit baseline and document the completion APIs that intentionally replace or extend it.
+
+\subsection{Domain, Authentication, Errors, Policy, Memory, and Context}
+
+\begin{longtable}{L{0.33\linewidth}L{0.61\linewidth}}
+\toprule
+\textbf{Function or method} & \textbf{Detailed behavior} \\
+\midrule
+\endhead
+\idcode{domain::new_id} & Prefixes a simple UUIDv7 value. Time ordering improves locality and debugging; uniqueness is probabilistic and no storage is touched. \\
+\idcode{domain::content_hash} & Serializes a value as JSON and returns a fallible \code{sha256:} hex digest; serialization errors propagate and can never alias the hash of empty bytes. \\
+\idcode{domain::stable_id} & Hashes the fallibly serialized value, removes the digest scheme, and prefixes the first 128 digest bits to create deterministic checkpoint and event identities. \\
+\idcode{Authority::rank} & Pure constant mapping from the six authority variants to 0--5, used for reconciliation and indexed persistence. \\
+\idcode{MemoryObject::new} & Builds an active, internal, governing version with new ID, current record time, empty permissions/supersession, and a hash of content; callers then add policy/time metadata. \\
+\idcode{MemoryObject::effective_at} & Returns interval overlap using inclusive endpoints; missing start/end is unbounded. \\
+\idcode{Budgets::default} & Returns 16 items, 8,000 tokens, eight steps, two repairs, 50,000 rows, 5 MB, and 30 seconds. \\
+\idcode{AtxnState::can_transition} & Pure exhaustive transition guard matching Specification A; any absent edge is forbidden. \\
+\idcode{AtxnState::terminal} & Marks rejected, aborted, and revoked as terminal. Published is intentionally nonterminal so revocation can follow. \\
+\idcode{Job::ready} & Constructs an unleased ready job with a new ID, attempt/fence zero, immediate eligibility, caller budget, and no failure reason. \\
+\idcode{IdentityProvider::authenticate_bearer} & Trait contract: map one bearer credential to a complete tenant-bound identity or return \code{Unauthenticated}; implementations must be thread safe. \\
+\idcode{StaticIdentityProvider::new} & Wraps an immutable credential map in \code{Arc} for cheap clone and concurrent reads. \\
+\idcode{StaticIdentityProvider::demo} & Installs the fixed local identities returned by \code{demo\_identities}. \\
+\idcode{StaticIdentityProvider::authenticate_bearer} & Clones the mapped identity; unknown credentials fail as \code{Unauthenticated} without disclosing valid tokens. \\
+\idcode{auth::demo_identities} & Creates analyst, reviewer, and administrator demo principals for \code{tenant\_demo}; it is never selected unless demo mode is explicit. \\
+\idcode{AmosError::from(rusqlite)} & Converts all SQLite failures to a storage error while preserving the driver message for internal/API error text. \\
+\idcode{AmosError::from(serde_json)} & Converts JSON encode/decode failures to serialization errors. \\
+\idcode{AmosError::into_response} & Maps every error variant to stable HTTP status/code/retry/review flags and a new request ID; authentication failures include \code{WWW-Authenticate: Bearer}; safe details are empty. \\
+\idcode{PolicyEngine::can_read_memory} & Pure fail-closed predicate requiring tenant equality, every object permission label in the subject permission set, and neither revoked nor tombstoned status. \\
+\idcode{PolicyEngine::authorize_memory_write} & Rejects cross-tenant writes and maps authority tier to permitted roles: owner/admin, reviewer/owner/admin, connector/system/admin, unrestricted user note, runtime/system/admin hypothesis, or connector/system/admin untrusted source. \\
+\idcode{PolicyEngine::authorize_task} & Requires tenant equality and approved definition; external or regulated tasks additionally require reviewer/owner/admin. \\
+\idcode{PolicyEngine::authorize_tool} & Requires the tool in the task allowlist and all declared relation labels in subject permissions. \\
+\idcode{PolicyEngine::authorize_review} & Requires owner/admin for owner-authority feedback; otherwise reviewer/owner/admin. \\
+\idcode{PolicyEngine::authorize_transaction_read} & Allows the owning subject or a reviewer/owner/admin within the tenant; denies cross-tenant access first. \\
+\idcode{PolicyEngine::authorize_artifact_read} & Checks artifact-to-transaction tenant and \atxn provenance, then delegates transaction ownership/reviewer authorization. \\
+\idcode{PolicyEngine::authorize_claim_read} & Authorizes the transaction, tenant, and \code{PolicyVisibility::Allowed}; redacted and denied claims are not returned. \\
+\idcode{PolicyEngine::authorize_revalidation} & Restricts revalidation to reviewer/owner/admin roles. \\
+\idcode{PolicyEngine::authorize_operations} & Restricts operations endpoints to the administrator role. \\
+\idcode{PolicyEngine::can_review_resources} & Private shared role predicate for reviewer, owner, or administrator. \\
+\idcode{policy::has_any} & Pure set-intersection helper used by role checks. \\
+\idcode{MemoryService::new} & Composes a store and policy engine without I/O. \\
+\idcode{MemoryService::write} & Authorizes authority/tenant, validates nonempty logical key/source and exact content hash, then persists an immutable source version. \\
+\idcode{MemoryService::list_visible} & Loads active tenant memory and filters every object with policy before returning it. Current cost is linear in active tenant memory. \\
+\idcode{MemoryService::supersede} & Loads the old object, checks visibility and replacement write authority, requires the same logical key, appends the old ID to \code{supersedes}, and delegates one atomic old/new commit. \\
+\idcode{MemoryService::retrieve} & Builds a sanitized FTS query; pushes tenant, active/non-superseded, interval, type, and all-label permission predicates into SQLite; reauthorizes returned objects; and retains bounded top-$K$ results from at most 2,000 candidates. \\
+\idcode{MemoryService::reconcile} & Groups by memory type and logical key, orders by authority then record time, reports divergent equal-highest-authority hashes as conflicts, otherwise selects one winner. \\
+\idcode{MemoryService::compact} & Rejects empty or partly invisible sources; creates a non-governing active-context summary with union permissions, interval intersection, all source IDs in provenance, and a fresh hash. It does not persist automatically. \\
+\idcode{memory::terms} & Splits on non-alphanumeric characters, lowercases, drops terms shorter than three characters, and deduplicates into an ordered set. \\
+\idcode{memory::retrieval_score} & Counts term substring matches across key/summary/type/content, weighted by 100, then adds authority and governing bonuses. It receives only already-authorized candidates. \\
+\idcode{MemoryTypeString::memory_type_string} & Trait declaration for rendering a memory type into the retrieval search text. \\
+\idcode{MemoryObject::memory_type_string} & Renders the closed memory-type enum deterministically for lexical scoring without a fallible serialization fallback. \\
+\idcode{ContextCompiler::new} & Captures a memory service. \\
+\idcode{ContextCompiler::compile} & Validates tenant/status/effective task interval; retrieves bounded authorized candidates; enforces per-role consistency minima; rejects governing ambiguity; selects required roles before optional diversity; accounts exact tokens; and freezes omissions, ranking trace, tokenizer, source versions, and selected objects. \\
+\idcode{context::role_candidates} & Filters reconciled objects by type and optional payload \code{role}; orders candidates by authority descending. \\
+\idcode{context::exact_token_count} & Serializes canonical content and counts the declared \code{amos\_lexical\_v1} tokens exactly; checked addition and required-first selection enforce the frozen token budget. \\
+\bottomrule
+\end{longtable}
+
+\clearpage
+\section{Executable Verification Matrix}
+
+The following inventory began with 42 named tests and now contains 61 unit, API, end-to-end, security, concurrency, migration, failure-injection, privacy, and recovery tests. ``Pass'' means \code{cargo test --all-targets} completed with zero failures; the release invocation runs the same contracts with optimizations.
+
+\subsection{Original Library Unit and Storage Contracts (17 of 31)}
+
+\begin{longtable}{L{0.43\linewidth}L{0.51\linewidth}}
+\toprule
+\textbf{Test} & \textbf{Control boundary proved} \\
+\midrule
+\endhead
+\idcode{state_machine_matches_normative_contract} & Representative valid/invalid \atxn edges, including repair, post-review revalidation, and post-publication revocation. \\
+\idcode{static_provider_rejects_unknown_credentials_as_unauthenticated} & Unknown demo bearer tokens fail with the authentication error class. \\
+\idcode{permission_filter_is_all_labels} & Object permissions are an all-label subset requirement, not an any-label match. \\
+\idcode{analyst_cannot_forge_owner_memory} & Analyst role cannot create owner-approved governing memory. \\
+\idcode{connector_has_stable_version_and_detects_change} & Unchanged SQLite schema hashes stably and an added column fails revalidation. \\
+\idcode{retrieve_filters_permissions_before_results} & Restricted memory is removed before retrieval results are constructed. \\
+\idcode{normalize_ignores_sql_spacing} & Verifier normalization treats equivalent spacing around a required predicate consistently. \\
+\idcode{signed_capability_rejects_tampering} & Modified signed claims fail capability validation. \\
+\idcode{source_version_identity_is_immutable} & Reusing a source/logical/version key with different content is rejected. \\
+\idcode{schema_upgrade_backfills_queryable_claim_validity_dimensions} & Additive initialization upgrades legacy rows and backfills indexed validity fields from JSON. \\
+\idcode{invalidation_is_bounded_and_enqueues_a_continuation_page} & Page cap is honored and excess impact creates durable continuation work. \\
+\idcode{concurrent_admission_returns_one_resource_and_one_outbox_event} & Racing identical admissions converge on one \atxn and one admission effect. \\
+\idcode{admission_rejects_a_reused_key_with_a_different_request_hash} & Idempotency-key reuse for different semantic input returns a stable conflict. \\
+\idcode{concurrent_transitions_use_compare_and_swap_and_emit_one_transition_event} & Only one racing state transition wins the expected state/sequence CAS and emits its effect. \\
+\idcode{execution_commit_is_fenced_and_idempotent_per_plan_step} & Stale \atxn fences fail and identical step/fence effects converge without duplicate completion. \\
+\idcode{checkpoints_preserve_fixed_fields_source_versions_and_terminal_immutability} & Checkpoints cannot rewrite admission, observed versions, state sequence, or terminal records. \\
+\idcode{expired_final_job_attempt_moves_to_dead_letter_instead_of_redelivery} & An expired lease at the final attempt is dead-lettered and not handed out again. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Original API and Binary Contracts (9 of 12)}
+
+\begin{longtable}{L{0.43\linewidth}L{0.51\linewidth}}
+\toprule
+\textbf{Test} & \textbf{Control boundary proved} \\
+\midrule
+\endhead
+\idcode{versioned_api_exposes_the_complete_local_mvp_contract} & Authenticated routes cover task, memory, verification, artifacts, claims, review, replay, validity, audit, jobs, connector, and source-event behavior. \\
+\idcode{protected_api_and_ui_routes_fail_closed_without_valid_bearer_credentials} & Every route except public health and OpenAPI rejects missing, malformed, and unknown credentials. \\
+\idcode{task_admission_returns_a_stable_idempotency_conflict_for_a_changed_request} & HTTP task admission exposes semantic idempotency conflict consistently. \\
+\idcode{review_mutations_are_idempotent_and_commit_one_feedback_job_and_event} & Repeated review HTTP commands return one review and do not duplicate feedback, job, audit, or outbox state. \\
+\idcode{bundled_binary_requires_explicit_demo_mode_before_initializing_storage} & CLI fails before creating local databases when demo mode is absent. \\
+\idcode{bundled_binary_initializes_demo_storage_only_when_demo_mode_is_explicit} & Explicit demo mode permits deterministic local initialization. \\
+\idcode{transactions_artifacts_claims_and_replay_enforce_owner_and_policy_visibility} & Non-owner analysts cannot inspect another analyst's transaction/artifact/replay, and non-visible claims remain denied. \\
+\idcode{ui_uses_authenticated_identity_and_cannot_be_upgraded_by_form_fields} & Browser form input cannot select or elevate the authenticated principal. \\
+\idcode{memory_listing_applies_policy_permissions_before_serialization} & The list endpoint never serializes a memory object missing caller labels. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Original End-to-End, Security, and Concurrency Contracts (16 of 18)}
+
+\begin{longtable}{L{0.43\linewidth}L{0.51\linewidth}}
+\toprule
+\textbf{Test} & \textbf{Control boundary proved} \\
+\midrule
+\endhead
+\idcode{runtime_requires_an_explicit_cryptographically_sized_capability_key} & Runtime construction rejects a signing key below 32 bytes. \\
+\idcode{runtime_configuration_redacts_the_capability_key_from_debug_output} & Debug formatting cannot print the signing secret. \\
+\idcode{complete_vertical_slice_is_review_gated_and_replayable} & One request persists manifest, plan, three executions, verifications, claims, edges, replay package, and needs-review outcome; replay hash comparison succeeds. \\
+\idcode{idempotent_request_returns_the_original_committed_resource} & Repeated semantic admission returns the original completed result rather than a duplicate resource. \\
+\idcode{review_appends_feedback_without_mutating_original_artifact} & Review creates governed feedback and claim-state changes while artifact content/hash remain unchanged. \\
+\idcode{concurrent_review_retries_across_connections_commit_once} & Separate SQLite connections racing the same review converge atomically. \\
+\idcode{review_commit_rolls_back_every_record_when_the_job_conflicts} & A job conflict aborts review, feedback, claim, audit, and event writes together. \\
+\idcode{reviewer_feedback_is_selected_on_the_next_relevant_run} & Approved feedback becomes optional governed context in the next applicable task. \\
+\idcode{authorized_approval_completes_the_local_publication_lifecycle} & Full reviewer approval revalidates governing state and atomically publishes transaction, artifact, and claims. \\
+\idcode{verifier_rejects_unsafe_queries_and_permits_only_declared_repairs} & Writes, schema violations, blocked data, and missing metric filters reject; only known renamed-column repair is allowed. \\
+\idcode{memory_permissions_and_document_content_cannot_reprogram_the_plan} & Restricted memory is absent and prompt-injected document text cannot change deterministic tool plan or gain capabilities. \\
+\idcode{source_invalidation_traverses_reverse_claim_dependencies} & A source change reaches supporting memory, marks dependent claims pending, and creates revalidation work. \\
+\idcode{scheduler_rejects_a_stale_fencing_token} & Scheduler completion with an old fence cannot commit. \\
+\idcode{job_enqueue_is_idempotent_only_for_the_same_job_request} & Same key/same job semantics converge; changed type, payload, or attempt budget conflicts. \\
+\idcode{expired_running_job_is_redelivered_with_a_higher_fence} & Expired leased work is reacquired with increased attempt and fence, invalidating the old handle. \\
+\idcode{expired_or_wrong_owner_job_leases_cannot_commit_and_active_leases_can_renew} & Wrong owner and expired lease fail; an active matching owner/fence can only extend the lease and then finish. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Completion Contracts Added After the Baseline (19)}
+
+The completion pass adds explicit tests for fallible hashing; deterministic context consistency, token budgets, ranking traces, and ambiguity; storage-filtered FTS top-$K$ retrieval; connector signature/relation binding and durable cursor restart; exhaustive capability-field mismatch; worker timeout, cancellation, and incremental bytes; outbox leases, delivery retry, dead letter, bounded shutdown, and stale handles; transitive continuation consumption; checksummed future/tampered migration rejection; state-driven recovery with a new runtime at fourteen lifecycle checkpoints; replay persistence/original immutability; object-promotion lost acknowledgment and unsafe keys; legal hold and idempotent erasure; API request limits and browser headers; opaque artifact cursors; and erasure-driven claim visibility revocation. The benchmark is a separate release executable, not counted as a unit test.
+
+\clearpage
+\section{Production Gap Register and Completion Checklist}
+
+This register prevents a reader from confusing complete documentation of the MVP with a claim that production infrastructure already exists.
+
+\begin{longtable}{L{0.20\linewidth}L{0.39\linewidth}L{0.33\linewidth}}
+\toprule
+\textbf{Area} & \textbf{Implemented local contract and evidence} & \textbf{External infrastructure still required} \\
+\midrule
+\endhead
+Tenancy and identity & Composite tenant keys, authenticated-tenant source events, owner/reviewer reads, all-label permissions, stale policy epochs, and hidden claims fail closed in executable tests. & Enterprise OIDC/SAML/JWKS and PostgreSQL forced RLS require a deployed identity tenant and database. \\
+Storage concurrency & Tokio-facing storage and review work use an eight-permit blocking lane; independent connections exercise CAS/fences. Schema v6 has a checksummed ledger, legacy backfill, and future/tamper rejection. & Production pool sizing, online PostgreSQL DDL, rollback rehearsal, backup, and point-in-time restore. \\
+Retrieval scale & FTS5 pushes tenant, active, supersession, interval, type, and all-label predicates into storage; a bounded candidate cap and heap produce top-$K$. & Million-object noisy-neighbor qualification against named production search hardware. \\
+Context semantics & Consistency minima, effective definitions, deterministic ranking trace, required-first selection, exact tokenizer accounting, ambiguity, and budget-pressure tests are implemented. & Organization-specific ranking evaluation corpora. \\
+Connector durability & Events are durable, deduplicated, restart-safe, and cursor paged; unknown cursors fail closed and source reads revalidate signed capabilities. & Customer credentials, auth rotation, vendor quota adapters, and outage certification. \\
+SQL enforcement & The frozen one-query subset rejects joins, CTEs, sets, subqueries, unsupported functions, and unbounded time; progress cancellation and incremental time/row/byte caps are tested. & Driver-specific cancellation conformance for each customer database. \\
+Capability hardening & HMAC verification is constant-time and every tenant, subject, \atxn, plan, step, tool, source, operation, relation, limit, epoch, fence, issuer, audience, and time field is rebound. & KMS/HSM custody, rotation, isolated worker identity, and egress policy. \\
+Worker isolation & Bounded execution, cancellation, query-only mode, untrusted-schema disablement, and capability fencing are local controls. & Per-tool containers or VMs, CPU/RSS/filesystem/network policy, and credential broker. \\
+Runtime recovery & \code{recover\_task} is state driven over durable manifest, plan, execution, evidence, review, object, and publication checkpoints. A test rebuilds the runtime at fourteen lifecycle boundaries. & Distributed controller election and remote worker placement. \\
+Verification breadth & Referential execution/verifier/memory support, numeric rates, concentration payload, statistical constraints, and deterministic chart SVG/hash binding are recomputed under profile version 2. & Additional task-specific calibrated verifier packs. \\
+Review and policy & Epochs are enforced at execution, commit, recovery, and read; reviews and validity changes are atomic and permission revocation redacts dependent claims. & External policy evaluator, simulation, and organization activation workflow. \\
+Invalidation & General reverse traversal uses a visited set, quotas, durable after-cursors, idempotent continuation consumption, stable audits, and claim-revalidation jobs. & Production storm thresholds and cooldown policy tuned on release infrastructure. \\
+Replay & A separate replay \atxn persists fenced executions, exact/equivalent/different comparisons, audit, and outbox state while preserving the original. & Long-term source-version leases supplied by customer data platforms. \\
+Publication & Filesystem objects stage, fsync, hash-check, atomically promote, read back, and recover a lost acknowledgment under a deterministic key. & S3/GCS lifecycle/residency plus external destination acknowledgment and revocation adapters. \\
+Outbox and jobs & Leased dispatch/worker batches enforce owner/fence/expiry, exponential retry, dead letter, idempotency, bounded shutdown, and completion timestamps. & Broker adapter and production alert routing. \\
+API contract & Required command keys, stable errors, a 1 MiB cap, opaque artifact cursors, request/correlation IDs, security headers, compatibility tests, and an OpenAPI 3.1 contract endpoint are present. & Generated client SDK distribution and tenant-specific quota configuration. \\
+Browser security & Bearer-only forms have no ambient cookie authority; CSP, frame denial, referrer denial, no-sniff, no-store, strict auth, and escaped output are tested. & Secure-cookie and CSRF design only if an enterprise session adapter replaces bearer-only requests. \\
+Observability & Tenant-safe counters and latency buckets are administrator-only; structured request traces, durable audit, outbox, and failure states are present. & Metrics/trace backend, SLO dashboards, alerts, paging, and game days. \\
+Retention/privacy & Versioned retention, legal holds, due erasure, FTS deletion, dependent-claim invalidation/redaction, idempotent receipts, audit, and outbox proof commit atomically. & Regional placement, cloud key destruction, legal export formats, and external deletion verification. \\
+Performance evidence & \code{control\_paths} measures indexed retrieval, SQL preflight, durable commit, job lease/complete, invalidation, complete task, and persisted replay; each reports p50/p95/p99 and enforces debug/release p95 thresholds. & Final throughput, RSS, allocation, and noisy-neighbor envelope on named release hardware. \\
+\bottomrule
+\caption{Local completion evidence and the remaining infrastructure-bound release integrations.}
+\end{longtable}
+
+\subsection{Build and Release Procedure}
+
+A reproducible local release runs, in order:
+\begin{enumerate}
+  \item \code{cargo fmt --all -- --check};
+  \item \code{cargo clippy --all-targets --all-features -- -D warnings};
+  \item \code{cargo test --all-targets};
+  \item \code{cargo build --release};
+  \item seed a clean root and exercise authenticated task, review, replay, invalidation, and job flows;
+  \item export the database/audit/outbox state and verify every final numeric claim resolves to its execution, metric, schema, data state, and verifier record;
+  \item render this PDF and inspect every page for clipping, broken tables, stale counts, and incorrect implementation claims.
+\end{enumerate}
+
+Production release adds migration rehearsal, dependency and license audit, SBOM/signing, secret scan, connector conformance, SQL adversarial suite, browser/API security suite, load and noisy-neighbor tests, backup restore, lost-acknowledgment recovery, invalidation storm, and disaster-recovery exercises. A completed checklist is evidence attached to a release; prose alone is not a gate.
+
+\clearpage
+\section{Service, Persistence, and Transport Function Reference}
+
+\subsection{Runtime Orchestration}
+
+\begin{longtable}{L{0.33\linewidth}L{0.61\linewidth}}
+\toprule
+\textbf{Function or method} & \textbf{Detailed behavior} \\
+\midrule
+\endhead
+\idcode{RuntimeConfig::fmt} & Custom debug formatter shows control, warehouse, and object paths but replaces the capability key with \code{[REDACTED]}. \\
+\idcode{RuntimeConfig::new} & Constructor accepting control/warehouse paths and key bytes and deriving a sibling object root; key length is checked by the issuer. \\
+\idcode{RuntimeConfig::demo} & Derives local control, warehouse, and object paths under a root and installs an explicit, known demo-only signing key. \\
+\idcode{AmosRuntime::open} & Opens schema-v6 store, policy/memory/context/evidence/scheduler/verifier, capability issuer, SQLite connector/worker, bounded semaphore, metrics, and filesystem object store. \\
+\idcode{AmosRuntime::get_transaction_for} & Tenant-loads a transaction, fails if absent, then applies owner-or-reviewer authorization. \\
+\idcode{AmosRuntime::list_artifacts_for} & Loads a bounded artifact page, resolves each parent transaction and all claims, and returns only artifacts whose artifact and every claim are visible. Filtering after the store limit can yield fewer results than requested. \\
+\idcode{AmosRuntime::get_artifact_for} & Loads artifact and parent transaction, authorizes both, authorizes every claim, gathers all outgoing claim dependencies, and returns the complete evidence view. \\
+\idcode{AmosRuntime::get_claim_for} & Loads claim, artifact, and transaction; authorizes artifact and claim; returns the claim with outgoing dependencies. \\
+\idcode{AmosRuntime::authorize_operations} & Transport-facing delegation to administrator policy. \\
+\idcode{AmosRuntime::authorize_review_queue} & Transport-facing delegation to reviewer policy without owner-authority requirement. \\
+\idcode{AmosRuntime::run_task} & Enters the bounded blocking lane and executes the complete payment-health \atxn: idempotent admission; observe; compile; verify/repair; capability/fence execution; independent claim verification; source/policy revalidation; atomic evidence; review or hash-checked publication. Duplicate in-progress requests enter state-driven recovery. \\
+\idcode{AmosRuntime::recover_task} & Reconstructs a nonterminal run from tenant-bound durable checkpoints and resumes automatic work. Only the admitting subject at the frozen policy epoch may resume it. \\
+\idcode{AmosRuntime::recover_task_until_checkpoint} & Operational failure-injection hook that runs the same controller until a named durable state; recovery tests reopen the runtime at each boundary. \\
+\idcode{AmosRuntime::replay} & Authorizes retained evidence, admits an idempotent replay \atxn, clones the frozen plan, issues new capabilities, persists fence-checked executions, records exact/equivalent/different comparisons, and atomically commits comparison, audit, and outbox state without mutating the original. \\
+\idcode{AmosRuntime::preflight_sql} & Loads/authorizes the payment task, compiles an ephemeral context, rejects context conflicts, wraps proposed SQL in a typed step, verifies it, and returns manifest ID plus referenced versions without execution/persistence. \\
+\idcode{AmosRuntime::revalidate_artifact} & Requires reviewer authority and visible artifact; for each claim checks referenced memory active/supersession state and replay retention; computes semantic/replay changes; atomically commits legal dimension updates, audit, and outbox events; returns changes and claims. \\
+\idcode{AmosRuntime::review_artifact} & Delegates atomic review/feedback, reloads resources, rejects a needs-review transaction on reject, or on full approval revalidates source/policy, advances lifecycle, and atomically publishes local artifact/claims. Corrections remain append-only feedback and do not mutate evidence. \\
+\idcode{AmosRuntime::artifact_transaction} & Private tenant-bound parent transaction lookup for an artifact; policy is applied by the caller. \\
+\idcode{AmosRuntime::connector_health} & Async delegation to the configured connector. \\
+\idcode{AmosRuntime::process_source_events} & Reads a bounded durable event page, requires every event tenant to equal the authenticated tenant, scans only that tenant's active memory, invokes deduplicated invalidation, and returns event-to-claim impacts. \\
+\idcode{AmosRuntime::advance} & Delegates one expected-state/sequence transition and optional outcome to the store. \\
+\idcode{AmosRuntime::build_plan} & Deterministically builds summary, concentration, and hourly-series SQL over the fixed evaluation interval and current context; no retrieved document text can alter the plan. \\
+\idcode{AmosRuntime::compose} & Requires all three executions; derives rate comparison, top concentration, and chart; renders the report; constructs four typed claims and mandatory metric/schema/data/execution edges plus optional document support. \\
+\idcode{AmosRuntime::replay_package} & Creates a level-3 one-year package containing manifest/plan/execution identities, template/config hash, expected artifact/execution hashes, and source versions. \\
+\idcode{AmosRuntime::load_result} & Reconstructs a previously committed idempotent run from transaction, artifact, replay package, manifest, plan, claims, edges, executions, and verifications; in-progress duplicates return conflict. \\
+\idcode{runtime::step} & Builds one read-only SQL step with all selected object IDs, relation labels, fixed limits, two attempts, renamed-column repair class, and verifier profile. \\
+\idcode{runtime::claim} & Builds a draft/current/allowed/level-3/active claim; causal and operational types need review while other types start verified. \\
+\idcode{runtime::edge} & Builds and hashes one claim dependency edge for the current tenant/\atxn. \\
+\idcode{runtime::role_id} & Returns the first object covering a required role or fails as required-role missing. \\
+\idcode{runtime::find_execution} & Finds an execution by step ID or fails not-found. \\
+\idcode{runtime::parse_time} & Parses fixed RFC3339 scenario constants and returns a validation error; no malformed value can panic the runtime. \\
+\bottomrule
+\end{longtable}
+
+\subsection{HTTP, UI, Seed, and Binary}
+
+\begin{longtable}{L{0.33\linewidth}L{0.61\linewidth}}
+\toprule
+\textbf{Function or method} & \textbf{Detailed behavior} \\
+\midrule
+\endhead
+\idcode{api::router} & Builds shared state, registers 28 protected paths plus public health/OpenAPI, applies authentication to the protected subtree, a 1 MiB body cap, validated request/correlation IDs, and fail-closed browser security headers, then binds state. \\
+\idcode{api::demo_router} & Calls the general router with the explicit static demo identity provider. \\
+\idcode{api::authenticate} & Extracts one bearer token, calls the provider, injects the returned identity into request extensions, and runs the next handler; any failure becomes the stable error envelope. \\
+\idcode{api::bearer_token} & Strictly accepts exactly two whitespace fields with case-insensitive Bearer scheme and a nonempty token; missing, invalid-text, malformed, or extra fields fail unauthenticated. \\
+\idcode{api::run_task} & Requires task text and an explicit idempotency key, logs validated request/correlation IDs with tenant/subject, awaits runtime orchestration, and returns the typed run result. \\
+\idcode{api::run_task_form} & Uses the authenticated identity and a fresh UI key, runs the task, escapes all dynamic artifact/claim text, and renders result/evidence HTML. No form field can choose identity. \\
+\idcode{api::get_transaction} & Returns the authorized transaction for either task or transaction alias path. \\
+\idcode{api::list_artifacts} & Returns up to 50 artifacts visible under runtime artifact and claim policy. \\
+\idcode{api::list_artifacts_page} & Decodes a resource-typed opaque cursor, applies a bounded indexed page, authorization-filters the results, and encodes the next artifact cursor. \\
+\idcode{api::get_artifact} & Returns artifact, claims, and dependencies as one JSON object after authorization. \\
+\idcode{api::replay} & Reads the optional JSON extractor only so authorization can precede malformed/missing-key disclosure; runtime authorization then requires a nonempty explicit key and returns an idempotent computational replay for either alias. \\
+\idcode{api::revalidate} & Requires runtime reviewer authorization and returns atomic claim-validity changes. \\
+\idcode{api::get_claim} & Returns one authorized claim and its dependencies. \\
+\idcode{api::review} & Deserializes an artifact-scoped idempotent review and awaits review/publication orchestration. \\
+\idcode{api::review_with_artifact} & Same review operation with artifact ID in the JSON body for the compatibility route. \\
+\idcode{api::list_memory} & Returns only policy-visible active memory. \\
+\idcode{api::search_memory} & Applies defaults of now, a one-year interval, and 20 items; caps caller items at 100; delegates permission-first retrieval. \\
+\idcode{api::verify_sql} & Returns typed SQL preflight for request text and proposed SQL. \\
+\idcode{api::write_memory} & Delegates policy/hash/source validation and returns HTTP 201 with the inserted object. \\
+\idcode{api::supersede_memory} & Delegates authorized, same-logical-key atomic supersession and returns the replacement. \\
+\idcode{api::audit} & Requires administrator role and returns a bounded tenant audit page with default 100. \\
+\idcode{api::metrics} & Requires administrator role and returns the tenant-safe task/recovery counter and latency-bucket snapshot. \\
+\idcode{api::set_retention} & Requires administrator role and commits an explicit-key deadline/legal-hold command through the bounded blocking lane. \\
+\idcode{api::erase_memory} & Requires administrator role and an explicit key, then atomically erases a due non-held object and returns its content-free proof. \\
+\idcode{api::connector_health} & Requires administrator role and returns connector health JSON. \\
+\idcode{api::enqueue_job} & Requires administrator role, delegates idempotent enqueue, and returns HTTP 201. \\
+\idcode{api::list_jobs} & Requires administrator role and returns a bounded tenant job page with default 100. \\
+\idcode{api::process_source_events} & Requires administrator role, passes an optional cursor, and returns event-to-affected-claim mapping. \\
+\idcode{api::health} & Public liveness response containing status, Rust runtime marker, and package version; it does not probe storage or connectors. \\
+\idcode{api::openapi} & Public OpenAPI 3.1 JSON describing bearer authentication, stable errors, explicit idempotent commands, and principal v1 operations. \\
+\idcode{api::workspace} & Renders the authenticated Analysis Workspace task form and product explanation. \\
+\idcode{api::memory_studio} & Loads visible memory, escapes text, and renders type/authority/version cards. \\
+\idcode{api::review_queue} & Requires reviewer authority, lists visible artifacts, and links to evidence inspection. \\
+\idcode{api::operations_console} & Requires administrator authority, lists 50 recent audit events, and renders escaped action/actor data. \\
+\idcode{api::escape} & Escapes ampersand, angle brackets, double/single quotes for HTML text/attribute contexts used by the server renderer. \\
+\idcode{api::page} & Wraps a trusted server-generated body in a responsive HTML shell; escapes the title and embeds a compile-time stylesheet. \\
+\idcode{seed::seed_demo} & Recreates the warehouse; constructs governed metric, schema, snapshot, user/review policy, deployment document, and restricted prior-analysis memory; writes version 3 payment task definition. Repeated control-store seeding is idempotent only where source-version hashes match. \\
+\idcode{seed::memory} & Builds a demo memory object and fills effective interval, permissions, version, and recalculated content hash. \\
+\idcode{seed::seed_warehouse} & Recreates \code{payment\_events} and deterministically inserts 14,400 minute-distributed events with a post-14:00 failure spike concentrated in Processor B/Visa. \\
+\idcode{seed::lcg} & Wrapping 64-bit linear-congruential generator for deterministic fixture data; it is not cryptographic. \\
+\idcode{seed::parse} & Parses fixed repository timestamps into UTC and returns a validation error for an invalid fixture. \\
+\idcode{main} & Initializes tracing, parses CLI, fails before storage unless demo is explicit, then seeds, serves with Ctrl-C shutdown, runs a task, or replays an artifact using the selected demo identity. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Evidence, Scheduling, and Persistence}
+
+\begin{longtable}{L{0.33\linewidth}L{0.61\linewidth}}
+\toprule
+\textbf{Function or method} & \textbf{Detailed behavior} \\
+\midrule
+\endhead
+\idcode{EvidenceService::new} & Composes store and policy engine. \\
+\idcode{EvidenceService::cite} & Builds a claim-to-target dependency edge, attaches optional source version and creating \atxn, then hashes the completed edge. It returns the edge without persisting it. \\
+\idcode{EvidenceService::review} & Authorizes review authority; validates key and unique claims; authorizes artifact and all claims; hashes normalized request content; creates review, scoped claim-state updates, append-only feedback memory, audit, and revalidation job; then delegates one idempotent atomic commit. \\
+\idcode{EvidenceService::invalidate_memory} & Derives a deterministic manual invalidation key from object and reason, then delegates bounded invalidation. \\
+\idcode{EvidenceService::invalidate_memory_with_key} & Traverses reverse claim dependencies through the store with a fixed 100-claim page and caller deduplication key. \\
+\idcode{Scheduler::new} & Captures a store. \\
+\idcode{Scheduler::enqueue} & Creates a ready job with five attempts and delegates idempotent persistence. \\
+\idcode{Scheduler::acquire} & Requires positive lease duration, computes now/expiry, and asks the store to acquire one due or expired job. \\
+\idcode{Scheduler::renew} & Requires positive extension and an active matching local handle; extends expiry and performs owner/fence/time-checked persistence. \\
+\idcode{Scheduler::complete} & Requires an active matching handle, changes it to complete, clears lease fields, and commits under the current fence. \\
+\idcode{Scheduler::fail} & Requires a nonempty reason and active handle; dead-letters when attempts are exhausted, otherwise schedules exponential retry $2^{\min(attempt,8)}$ seconds; clears the lease and fence-checks commit. \\
+\idcode{scheduler::active_lease_owner} & Returns the nonempty owner only when state is running and fence matches; stale or ownerless handles conflict. \\
+\idcode{Store::open} & Creates parent directories, opens a file-backed SQLite connection, wraps it in a shared mutex, initializes/upgrades schema, and returns the adapter. \\
+\idcode{Store::in_memory} & Opens an in-memory connection and runs the identical schema initializer; used by tests and embedding scenarios. \\
+\idcode{Store::connection} & Locks the shared connection; a poisoned mutex becomes a storage error. This serializes operations within one store instance. \\
+\idcode{Store::init_schema} & Enables WAL, foreign keys, normal synchronization, and a five-second busy timeout; applies and verifies the checksummed forward-only schema-v6 ledger, creates indexed control tables, and backfills legacy claim, review, outbox, and FTS fields idempotently. \\
+\idcode{Store::schema_version} & Returns the maximum verified migration-ledger version and fails if the ledger is empty. \\
+\idcode{Store::write_memory} & Enforces immutable \code{(tenant,source,logical,source-version)} identity: identical hash is idempotent, different hash conflicts; otherwise inserts scalar indexes and full JSON. \\
+\idcode{Store::get_memory} & Tenant/object lookup through the generic JSON loader. \\
+\idcode{Store::list_active_memory} & Returns tenant rows whose scalar status is active and \code{superseded\_by} is null. Authorization is intentionally performed by the memory service. \\
+\idcode{Store::supersede_memory} & In one immediate transaction loads and requires an active old version, updates its JSON/scalar lifecycle, inserts the replacement, and commits. \\
+\idcode{Store::put_task_definition} & Inserts a definition once by tenant/task/version; later writes with the same key are ignored to preserve immutability. \\
+\idcode{Store::get_task_definition} & Selects the greatest approved version for tenant and task type. \\
+\idcode{Store::get_task_definition_version} & Loads the exact immutable task version frozen by a recovering \atxn. \\
+\idcode{Store::create_transaction} & Validates admitted sequence-zero state; starts an immediate transaction; resolves tenant/idempotency duplicates by request hash; inserts the \atxn and same-commit \code{atxn.admitted} outbox event. \\
+\idcode{Store::get_transaction} & Tenant/\atxn JSON lookup. \\
+\idcode{Store::transition_transaction} & Validates the state edge, loads current snapshot, requires expected state/sequence and nonterminal status, increments sequence, updates with a scalar CAS predicate, emits same-commit transition event, and returns the new snapshot. \\
+\idcode{Store::checkpoint_transaction} & Under an immediate transaction, verifies fixed admission/lifecycle fields, monotonic update time, and append-only observed versions; performs same-state/sequence CAS without emitting a transition event. \\
+\idcode{Store::save_manifest} & Inserts one immutable context manifest and its \atxn identity; identical duplicate bodies are idempotent and divergent reuse conflicts. \\
+\idcode{Store::get_manifest} & Tenant/manifest JSON lookup. \\
+\idcode{Store::get_manifest_by_atxn} & Loads the latest manifest checkpoint for one tenant/\atxn recovery identity. \\
+\idcode{Store::save_plan} & Inserts one immutable plan and its \atxn identity. \\
+\idcode{Store::get_plan} & Tenant/plan JSON lookup. \\
+\idcode{Store::get_plan_by_atxn} & Loads the latest immutable plan checkpoint for one tenant/\atxn. \\
+\idcode{Store::save_execution} & Validates essential IDs/hash, requires the parent \atxn in executing state with matching sequence fence, makes tenant/\atxn/step/fence effects idempotent, rejects divergent duplicates, inserts execution and same-commit completion event. \\
+\idcode{Store::list_executions} & Returns execution records for one tenant/\atxn in insertion order. \\
+\idcode{Store::save_verification} & Inserts an immutable verifier record with scalar outcome; identical duplicate bodies are idempotent and divergent reuse conflicts. \\
+\idcode{Store::list_verifications} & Returns verifier records for one tenant/\atxn in insertion order. \\
+\idcode{Store::commit_evidence} & Requires revalidating state and a consistent bundle; snapshot-checks the \atxn; CAS-transitions to evidence committed; inserts artifact, claims, edges, replay package, audit, and outbox event in one immediate transaction. \\
+\idcode{Store::get_artifact} & Tenant/artifact lookup. \\
+\idcode{Store::get_artifact_by_atxn} & Returns the most recently inserted artifact for a tenant/\atxn. \\
+\idcode{Store::list_artifacts} & Returns at most 100 tenant artifacts in reverse insertion order; runtime authorization filters the result afterward. \\
+\idcode{Store::list_artifacts_after} & Applies an indexed tenant/row cursor and bounded limit; invalid or cross-tenant cursors fail closed before runtime authorization. \\
+\idcode{Store::commit_local_publication} & Requires publication-pending state and a consistent draft bundle; snapshot-checks transaction/artifact/claims; CAS-publishes the \atxn and changes artifact/claim publication validity with sequence increments; inserts audit/outbox atomically; updates caller-owned values only after commit. \\
+\idcode{Store::list_claims} & Returns artifact claims in insertion order. \\
+\idcode{Store::get_claim} & Tenant/claim lookup. \\
+\idcode{Store::list_edges_from} & Uses the source-edge index to return outgoing dependencies for one typed endpoint. \\
+\idcode{Store::list_edges_to} & Uses the target-edge index to return reverse dependencies for one typed endpoint. \\
+\idcode{Store::invalidate_claims_page} & Validates request and caps pages at 250; resolves duplicate keys by request hash; indexed-joins target edges to claims; changes current claims to pending revalidation; enqueues per-claim work and validity events; optionally enqueues continuation; writes receipt, audit, and processed event atomically. \\
+\idcode{Store::get_replay_package} & Retrieves the unique replay package for a tenant/artifact. \\
+\idcode{Store::get_replay_result} & Retrieves an idempotently committed comparison for a replay \atxn. \\
+\idcode{Store::commit_replay_result} & Verifies durable replay executions and atomically commits comparison, audit, outbox, and the revalidating-to-evidence CAS. \\
+\idcode{Store::commit_review} & Validates the whole review bundle; resolves idempotent duplicates by request hash; snapshot-checks artifact/claims; inserts review; applies only allowed review-state changes; inserts feedback, audit, revalidation job, per-claim events, and review event atomically. \\
+\idcode{Store::get_review_by_idempotency_key} & Retrieves a tenant review by its command key. \\
+\idcode{Store::commit_claim_validity_updates} & Validates equal immutable evidence sets and legal dimension transitions; snapshot-checks all claims; applies changed dimensions, emits per-claim events, appends audit, and commits atomically. \\
+\idcode{Store::append_audit} & Inserts one append-only audit event. \\
+\idcode{Store::list_audit} & Returns at most 250 tenant audit events newest first. \\
+\idcode{Store::set_retention} & Idempotently upserts one tenant/target policy and commits its stable audit and outbox event; same-key semantic mismatch conflicts. \\
+\idcode{Store::get_retention} & Tenant/type/target lookup for the active legal-hold and deadline record. \\
+\idcode{Store::erase_memory} & Requires a due, non-held memory target; traverses dependent claims under quota; atomically redacts/invalidates claims, deletes FTS and memory rows, and appends an idempotent receipt, audit, and outbox proof. \\
+\idcode{Store::list_outbox} & Returns at most 500 tenant events, decodes JSON/timestamps, and orders by creation and event ID. \\
+\idcode{Store::acquire_outbox} & Leases one due/expired event with increased attempt and fence; exhausted events dead-letter rather than redeliver. \\
+\idcode{Store::finish_outbox} & Requires the unexpired matching owner and fence, then atomically delivers, schedules exponential retry, or dead-letters and records an audit. \\
+\idcode{Store::enqueue_job} & Validates a new job and wraps the transactional idempotent enqueue helper in an immediate commit. \\
+\idcode{Store::acquire_job} & Validates tenant/worker/time; repeatedly selects one due ready/retry job or expired running lease; dead-letters exhausted expired work; otherwise increments attempt and fence, installs owner/expiry with CAS, emits acquisition event, and returns one job. \\
+\idcode{Store::renew_job_lease} & Requires a future extension and matching candidate handle; loads current job, validates fixed fields and active lease, permits only a strictly later expiry, CAS-updates, and emits renewal event. \\
+\idcode{Store::finish_job} & Accepts only complete/retry-wait/dead-letter with consistent metadata and cleared lease; validates the current unexpired owner/fence; CAS-updates and emits the state-specific event. \\
+\idcode{Store::list_jobs} & Returns at most 250 tenant jobs ordered by next-run time descending. \\
+\idcode{Store::get_json} & Private generic optional single-row JSON decoder for a caller-supplied SQL statement and bound parameters. \\
+\idcode{Store::list_json} & Private generic multirow JSON decoder. \\
+\idcode{store::validate_initial_transaction} & Requires all admission identities and sequence-zero admitted, nonterminal, outcome-free state. \\
+\idcode{store::validate_transaction_checkpoint} & Forbids terminal mutation, changes to fixed admission/lifecycle fields, backward time, and replacement/removal of already observed source versions. \\
+\idcode{store::ensure_transaction_snapshot} & Reloads a tenant/\atxn inside the caller transaction and requires structural equality before an atomic multi-resource commit. \\
+\idcode{store::ensure_artifact_snapshot} & Reloads and structurally compares an artifact before publication/review. \\
+\idcode{store::ensure_claim_snapshot} & Reloads and structurally compares a claim before validity/review mutation. \\
+\idcode{store::validate_review_bundle} & Verifies identities, recomputed request hash, unique/existing claim targets, correction semantics, immutable claim evidence/dimensions, exact allowed review-state changes, and matching feedback/audit/job metadata. \\
+\idcode{store::calculated_review_request_hash} & Hashes the normalized semantic content of a review command, excluding generated IDs and timestamps. \\
+\idcode{store::validate_claim_validity_batch} & Requires equal nonempty claim sets and consistent audit identity; freezes evidence, publication and review dimensions; permits only legal semantic/replay/supersession transitions. \\
+\idcode{store::valid_semantic_transition} & Allows current to pending/stale/invalid, pending to current/stale/invalid, stale to pending/invalid, identity transitions, and no transition out of invalid. \\
+\idcode{store::valid_replay_transition} & Allows identity or one-way degradation/expiry; nothing leaves expired. \\
+\idcode{store::valid_supersession_transition} & Allows active to superseded/tombstoned, superseded to tombstoned, or identity; tombstone is final. \\
+\idcode{store::same_claim_evidence} & Compares all immutable claim identity/content/risk/support fields while deliberately excluding validity dimensions. \\
+\idcode{store::update_claim_validity_tx} & Updates all six validity columns and JSON body and increments validity sequence for one tenant/claim; caller supplies surrounding transaction and snapshot checks. \\
+\idcode{store::claim_validity_json} & Projects the six independent dimensions for outbox before/after payloads. \\
+\idcode{store::validate_evidence_bundle} & Requires consistent tenant/\atxn/artifact/package/audit identities, expected artifact hash, unique claims, and claim-rooted same-transaction dependency edges. \\
+\idcode{store::validate_publication_bundle} & Requires consistent transaction/artifact/claim/audit identities and a draft artifact. \\
+\idcode{store::validate_initial_job} & Requires nonempty identities, ready/unleased state, zero attempt/fence, positive attempt budget, and no failure reason. \\
+\idcode{store::same_execution_effect} & Compares semantic execution identity, inputs, output, resource counts, fence, and status while ignoring generated execution/capability IDs, latency, and creation time. \\
+\idcode{store::same_job_request} & Defines enqueue idempotency by tenant, command key, type, payload, and attempt budget. \\
+\idcode{store::get_job_tx} & Loads one tenant/job using a caller-owned SQLite transaction/connection. \\
+\idcode{store::validate_active_job_lease} & Freezes job identity/payload/attempt/fence and requires running state, expected owner/fence, and unexpired current lease. \\
+\idcode{store::new_outbox_event} & Constructs a pending event with a new ID and current time. \\
+\idcode{store::insert_outbox_tx} & Inserts an event's scalar envelope and serialized payload in the caller's transaction; unique idempotency keys reject duplicate effects. \\
+\idcode{store::enqueue_job_tx} & Validates the job; resolves duplicate enqueue keys by semantic request equality; inserts job and same-transaction enqueue event. \\
+\idcode{store::parse_timestamp} & Strictly parses stored RFC3339 text into UTC or returns a storage-corruption error. \\
+\idcode{store::add_column_if_missing} & Validates table/column identifiers as alphanumeric/underscore, inspects \code{PRAGMA table\_info}, and applies one additive column migration when absent. \\
+\idcode{store::insert_memory_tx} & Inserts a complete memory row in a caller-owned transaction; used when memory must commit with review state. \\
+\idcode{store::insert_audit_tx} & Inserts one audit row in a caller-owned transaction. \\
+\idcode{store::to_json} & Strict typed JSON serialization into the crate result type. \\
+\idcode{store::from_json} & Strict typed JSON deserialization into the crate result type. \\
+\idcode{store::enum_json} & Serializes a unit enum and strips JSON quotes for scalar database columns. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Connector, Workers, and Verification}
+
+\begin{longtable}{L{0.33\linewidth}L{0.61\linewidth}}
+\toprule
+\textbf{Function or method} & \textbf{Detailed behavior} \\
+\midrule
+\endhead
+\idcode{Connector::source_id} & Trait contract returning a stable connector identifier. \\
+\idcode{Connector::discover} & Trait contract for cursor-paged, scope-filtered source-qualified entities. \\
+\idcode{Connector::observe} & Trait contract for a versioned observation including time, freshness, access, consistency, and retention. \\
+\idcode{Connector::read} & Trait contract for capability-bound exact-version content or a bounded handle. \\
+\idcode{Connector::validate} & Trait contract comparing an observed version with current source state. \\
+\idcode{Connector::subscribe} & Trait contract for cursor-paged source changes. \\
+\idcode{Connector::health} & Trait contract for safe health, lag, rate-limit, and degraded-capability status. \\
+\idcode{SqliteWarehouseConnector::new} & Stores tenant/source/path, installs \code{analytics} and \code{payments} permission labels, and uses a durable deduplicated connector-event table created on first event access. \\
+\idcode{SqliteWarehouseConnector::path} & Returns the configured warehouse path without I/O. \\
+\idcode{SqliteWarehouseConnector::emit_change} & Builds a source event and stable deduplication key, inserts it into the durable connector inbox, and returns the original row for an idempotent duplicate. \\
+\idcode{SqliteWarehouseConnector::schema_snapshot} & Opens SQLite, normalizes a \code{table:} reference, safely quotes the table name for \code{PRAGMA table\_info}, returns column name/type/nullability JSON, and fails when the table is absent. \\
+\idcode{SqliteWarehouseConnector::source_id} & Concrete trait implementation returning the stored source identifier. \\
+\idcode{SqliteWarehouseConnector::discover} & On the first page, lists non-system SQLite tables ordered by name and filters by wildcard or substring; any supplied cursor yields an empty terminal page. \\
+\idcode{SqliteWarehouseConnector::observe} & Hashes the current schema snapshot into a C1 source version and attaches tenant, permissions, classification, freshness zero, and observation time. \\
+\idcode{SqliteWarehouseConnector::read} & Independently verifies signature/time/audience/epoch/fence plus tenant, source, tool, operation, relation, limits, and invocation identities; then re-hashes content, rejects a version race, and returns a bounded handle. \\
+\idcode{SqliteWarehouseConnector::validate} & Recomputes schema version and returns equality plus current version. \\
+\idcode{SqliteWarehouseConnector::subscribe} & Loads at most 250 durable events after a tenant-scoped cursor; restart preserves progress and unknown/expired cursors fail closed. \\
+\idcode{SqliteWarehouseConnector::health} & Requires a file and successful SQLite open; otherwise fails as connector unavailable, else returns healthy with zero lag. \\
+\idcode{CapabilityIssuer::new} & Rejects secrets shorter than 32 bytes, copies the key, and fixes issuer to \code{amos-runtime}. \\
+\idcode{CapabilityIssuer::issue} & Copies plan/step/identity scope and limits, derives worker audience and declared relations, sets query operation, current policy epoch/fence, unique token ID, one-second clock skew, 60-second expiry, then signs the claims. \\
+\idcode{CapabilityIssuer::validate} & Decodes the signature and uses constant-time HMAC verification, then checks issuer, audience, activation/expiry, token identity, policy epoch, and fence. \\
+\idcode{CapabilityIssuer::sign} & JSON-serializes claims, computes HMAC-SHA-256, and returns URL-safe base64 without padding. \\
+\idcode{SqlWorker::new} & Stores the warehouse path and capability issuer. \\
+\idcode{SqlWorker::execute} & Validates every capability binding; opens SQLite query-only with untrusted schema disabled; installs a progress handler for cancellation and wall time; accounts rows and serialized bytes incrementally; and returns a hashed fenced execution record. \\
+\idcode{StatisticsWorker::rate_comparison} & Rejects zero denominators and returns current/baseline rates plus absolute change as deterministic floating-point JSON. \\
+\idcode{ChartWorker::timeseries_svg} & Rejects empty points, scales an accessible 600-by-260 SVG polyline to the maximum value with a 0.01 floor, and returns SVG plus content hash. \\
+\idcode{workers::audience} & Maps \code{sql.*} to SQL worker, \code{stats.*} to statistics worker, and all other tools to chart worker. \\
+\idcode{workers::sql_value} & Converts SQLite null/integer/real/text/blob values to JSON; blobs are URL-safe base64 and invalid UTF-8 text fails execution instead of being silently changed. \\
+\idcode{Verifier::verify_step} & Authorizes tool/relations; parses exactly one read-only query; visits table, column, and alias references; checks schema allowlists, blocked columns, renamed-column repair, required metric filters, and freshness warnings; then returns pass/warning/repair/reject with stable checks and step hash. \\
+\idcode{Verifier::repair_step} & Accepts only \code{COLUMN\_SUPERSEDED:old:new}; clones the step and performs the declared string replacement in its SQL. Unknown/malformed repairs return \code{None}. \\
+\idcode{Verifier::verify_claims} & Resolves tenant-scoped execution, verification, and manifest-memory references; requires typed support relations; recomputes rates and concentration payloads; regenerates the deterministic chart and hash; marks causal/operational obligations for review; and emits a version-2 aggregate record. \\
+\idcode{verification::record} & Appends a pass or reject check and mirrors failure text into the aggregate error list. \\
+\idcode{verification::normalize} & Removes non-ASCII-alphanumeric characters and lowercases; used for metric/blocked-column textual normalization after AST parsing. \\
+\idcode{SchemaReferences::pre_visit_relation} & SQL visitor hook collecting lowercase relation names. \\
+\idcode{SchemaReferences::pre_visit_select} & SQL visitor hook collecting projection aliases so they are not mistaken for source columns. \\
+\idcode{SchemaReferences::pre_visit_expr} & SQL visitor hook collecting simple identifiers and final components of compound identifiers. \\
+\bottomrule
+\end{longtable}

@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use crate::{
     Result,
-    domain::{Authority, Identity, MemoryObject, RiskClass, TaskDefinition},
+    domain::{
+        AnalyticalTransaction, Artifact, Authority, Claim, Identity, MemoryObject,
+        PolicyVisibility, RiskClass, TaskDefinition,
+    },
     error::AmosError,
 };
 
@@ -103,6 +106,88 @@ impl PolicyEngine {
             ))
         }
     }
+
+    pub fn authorize_transaction_read(
+        &self,
+        identity: &Identity,
+        transaction: &AnalyticalTransaction,
+    ) -> Result<()> {
+        if identity.tenant_id != transaction.tenant_id {
+            return Err(AmosError::PermissionDenied(
+                "cross-tenant transaction access".into(),
+            ));
+        }
+        if identity.policy_epoch != transaction.policy_epoch {
+            return Err(AmosError::PermissionDenied(
+                "transaction policy epoch is stale for this identity".into(),
+            ));
+        }
+        if identity.subject_id == transaction.subject_id || self.can_review_resources(identity) {
+            Ok(())
+        } else {
+            Err(AmosError::PermissionDenied(
+                "transaction is not owned by this identity".into(),
+            ))
+        }
+    }
+
+    pub fn authorize_artifact_read(
+        &self,
+        identity: &Identity,
+        artifact: &Artifact,
+        transaction: &AnalyticalTransaction,
+    ) -> Result<()> {
+        if artifact.tenant_id != transaction.tenant_id || artifact.atxn_id != transaction.atxn_id {
+            return Err(AmosError::PermissionDenied(
+                "artifact provenance does not match its transaction".into(),
+            ));
+        }
+        self.authorize_transaction_read(identity, transaction)
+    }
+
+    pub fn authorize_claim_read(
+        &self,
+        identity: &Identity,
+        transaction: &AnalyticalTransaction,
+        claim: &Claim,
+    ) -> Result<()> {
+        self.authorize_transaction_read(identity, transaction)?;
+        if identity.tenant_id != claim.tenant_id {
+            return Err(AmosError::PermissionDenied(
+                "cross-tenant claim access".into(),
+            ));
+        }
+        if claim.policy_visibility != PolicyVisibility::Allowed {
+            return Err(AmosError::PermissionDenied(
+                "claim is not visible under the active policy".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn authorize_revalidation(&self, identity: &Identity) -> Result<()> {
+        if self.can_review_resources(identity) {
+            Ok(())
+        } else {
+            Err(AmosError::PermissionDenied(
+                "reviewer authority required for revalidation".into(),
+            ))
+        }
+    }
+
+    pub fn authorize_operations(&self, identity: &Identity) -> Result<()> {
+        if has_any(&identity.roles, &["admin"]) {
+            Ok(())
+        } else {
+            Err(AmosError::PermissionDenied(
+                "operations role required".into(),
+            ))
+        }
+    }
+
+    fn can_review_resources(&self, identity: &Identity) -> bool {
+        has_any(&identity.roles, &["reviewer", "owner", "admin"])
+    }
 }
 
 fn has_any(values: &BTreeSet<String>, expected: &[&str]) -> bool {
@@ -139,7 +224,8 @@ mod tests {
             "catalog",
             "1",
             Authority::OwnerApproved,
-        );
+        )
+        .unwrap();
         object.permissions = BTreeSet::from(["payments".into(), "sre".into()]);
         assert!(!PolicyEngine.can_read_memory(&identity(), &object));
     }
@@ -155,7 +241,8 @@ mod tests {
             "user",
             "1",
             Authority::OwnerApproved,
-        );
+        )
+        .unwrap();
         assert!(
             PolicyEngine
                 .authorize_memory_write(&identity(), &object)

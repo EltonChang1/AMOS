@@ -34,8 +34,8 @@
 
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small\textcolor{amosblue}{AMOS Build Guide}}
-\fancyhead[R]{\small\textcolor{gray}{From kernel to first production slice}}
+\fancyhead[L]{\small\textcolor{amosblue}{AMOS Product Architecture}}
+\fancyhead[R]{\small\textcolor{gray}{Architecture + Rust Reference}}
 \fancyfoot[C]{\small\thepage}
 \renewcommand{\headrulewidth}{0.3pt}
 \setlength{\headheight}{14pt}
@@ -95,10 +95,14 @@ This guide tells a team how to \emph{build} \amos. It converts the research pape
 
 \amos sits between analytical agents and governed data systems. It compiles a permission-safe working set, verifies computation against current schema and metric state, executes through capability-limited workers, and commits every material claim with provenance, review state, invalidation rules, and replay metadata. Models propose plans and interpretations; deterministic services retain authority over access, execution, validation, and publication.
 
-Use this document with the research paper and the Rust requirements matrix. The research paper defines \emph{why the kernel exists} and what correctness means. This guide defines \emph{what to build first}, which contracts are release-blocking, which capabilities stay deferred, and how the current Rust modular monolith maps to those contracts. Appendices A--F freeze the first-slice contracts; generated schemas, migrations, and conformance fixtures in the repository are the executable source of truth.
+The architecture is deliberately incremental. A startup first ships a modular monolith that completes one read-only analytical workflow end to end. It then adds durable feedback, scheduling, multi-tenant governance, connector breadth, and controlled autonomy only after explicit correctness, security, reliability, and customer-value gates pass. The guide defines the complete subsystem map and the normative contracts that detailed designs must implement. Appendices A--F freeze the most dangerous first-release contracts. Appendices G--K describe the current Rust implementation: its complete type and function inventory, exact persistence and transport surfaces, test evidence, low-level cost model, and known production gaps. Database DDL, generated schemas, and adapter conformance fixtures remain versioned engineering artifacts rather than claims hidden in prose.
 \end{abstract}
 
-\section{How to Use This Guide}
+\clearpage
+\tableofcontents
+\clearpage
+
+\section{Purpose, Audience, and Definition of Complete}
 
 \subsection{Document roles}
 
@@ -135,8 +139,11 @@ The first slice is complete only when a builder can answer all of the following 
   \item how every numeric claim resolves to computation and governing state;
   \item how feedback changes future work without rewriting history;
   \item how a source change invalidates dependent conclusions;
-  \item which tests prove the slice, and which expansion gates unlock deferred work.
-\end{enumerate}
+  \item how the service is deployed, monitored, recovered, and tested;
+  \item what every production function and trait method does, which state it reads or writes, and how it fails;
+  \item which current implementation behaviors are measured facts versus target production contracts;
+  \item which capabilities are intentionally deferred and what gate unlocks them.
+\end{itemize}
 
 \section{Product Value and System Boundary}
 \label{sec:value}
@@ -369,8 +376,9 @@ docs/                 requirements matrix and evaluation protocols
 
 Dependencies point inward to domain types. Architecture tests and code review enforce: no credentials in model-facing packages; tenant predicates in every repository path; table ownership respected.
 
-\section{Analytical State Transaction}
-\label{sec:runtime}
+The current Rust MVP implements authenticated, server-rendered versions of all four surfaces. The Analysis Workspace submits the fixed payment-health task and displays the artifact and evidence ledger; Memory Studio lists only policy-visible memory; Review Queue requires reviewer authority and links to artifact evidence; Operations Console requires administrator authority and lists audit events. The administrator API exposes jobs, metrics, retention, erasure, connector health, and source-event processing. Connector configuration, metric editing, publication destinations, and interactive retry/recovery controls in Table~3 remain deployment-product interfaces rather than claims made for these four local pages.
+
+\subsection{Customer Journey}
 
 \atxn is the system contract connecting memory, tools, validation, publication, and later invalidation. It is not an ACID transaction across external systems. It creates a truthful \amos commit record after optimistic revalidation of the external versions used.
 
@@ -490,12 +498,7 @@ The graph proves traceability and change impact. Causal justification remains me
 
 \subsection{Multidimensional validity}
 
-\must Validity dimensions change independently: publication validity, semantic validity, policy visibility, replay availability, review state, and supersession state. A claim can remain historically valid at publication time while becoming semantically stale, hidden from a newly unauthorized viewer, or unreplayable after retention expiry. Specification~F is normative.
-
-\section{Product Surfaces}
-\label{sec:surfaces}
-
-Ship four surfaces over the same APIs and permission checks; none receives privileged database access.
+The production public API is versioned under \code{/v1}. All responses carry validated request and correlation identifiers in headers, and failures use a stable error envelope and bearer challenge. Task, replay, review, job, retention, and erasure commands require explicit idempotency keys. Immutable memory source versions, execution effects, state transitions, connector/source events, invalidation pages, and outbox effects derive stable semantic identities at the domain boundary. The original direct-resource success shapes remain unchanged for v1 compatibility; a universal success wrapper would be a breaking versioned API change, not a property silently attributed to v1.
 
 \begin{table}[ht]
 \centering
@@ -504,16 +507,37 @@ Ship four surfaces over the same APIs and permission checks; none receives privi
 \toprule
 \textbf{Surface} & \textbf{Primary user} & \textbf{First-slice capabilities} \\
 \midrule
-Analysis Workspace & Analyst / operator & Submit or run the payment task; inspect admitted scope, plan, progress, warnings, terminal state; open claims to computation and source. \\
-Memory Studio & Data owner & Inspect seeded objects and versions; approve metric/schema authority; view source health before activation. \\
-Review Queue & Reviewer & Approve, reject, or correct at claim scope; assign effective time and authority; see affected future tasks. \\
-Operations Console & Operator & Search transactions and audit events; inspect connector/job health; retry idempotent steps; revalidate claims; run replay. \\
+\idcode{POST /v1/tasks} & Admit and run analysis & Request and required idempotency key; returns the complete typed run result. \\
+\path|GET /v1/tasks/{id}| & Observe lifecycle & Owner-or-reviewer authorized transaction state and outcome. \\
+\idcode{POST /v1/memory/search} & Inspect governed memory & Permission-first typed results over a bounded time interval. \\
+\idcode{GET/POST /v1/memory} & List or create memory & Read is policy-filtered; write authority and source are caller constrained. \\
+\path|POST /v1/memory/{id}/supersede| & Append a replacement & Atomically marks the old logical version superseded and inserts the replacement. \\
+\idcode{POST /v1/verify/sql} & Preflight proposed SQL & Structured pass/warning/repair/reject, rule IDs, and referenced versions. \\
+\path|GET /v1/artifacts[/{id}]| & List or inspect artifacts & Owner-or-reviewer authorization plus claim visibility and dependency edges. \\
+\idcode{GET /v1/artifacts/page} & Page artifacts & Bounded policy-filtered page with a resource-typed opaque cursor. \\
+\path|POST /v1/artifacts/{id}/replay| & Computational replay & Re-executes retained level-3 plan steps and compares output hashes. \\
+\path|POST /v1/artifacts/{id}/revalidate| & Check current validity & Atomically updates semantic and replay validity with an audit and outbox event. \\
+\path|GET /v1/claims/{id}| & Inspect a claim & Exact payload, independent validity dimensions, and support edges. \\
+\idcode{POST /v1/reviews} & Approve, reject, or correct & Idempotent scoped review; feedback, claim state, audit, job, and outbox commit together. \\
+\idcode{GET/POST /v1/jobs} & Inspect or enqueue work & Administrator-only durable jobs with idempotent enqueue. \\
+\idcode{GET /v1/audit} & Inspect audit history & Administrator-only, tenant-scoped and bounded. \\
+\idcode{GET /v1/metrics} & Inspect operations & Administrator-only task/recovery counters and latency buckets. \\
+\idcode{POST /v1/retention} & Set retention or legal hold & Administrator-only idempotent policy command. \\
+\path|POST /v1/retention/memory/{id}/erase| & Erase due memory & Administrator-only, legal-hold-aware atomic erasure and proof. \\
+\idcode{GET /v1/connectors/health} & Probe the source & Administrator-only connector status. \\
+\idcode{POST /v1/source-events/process} & Process source changes & Administrator-only bounded invalidation entry point. \\
 \bottomrule
 \end{tabularx}
 \caption{Surfaces expose governed state. A draft must never be visually equivalent to a published artifact.}
 \end{table}
 
-Experience invariants: every UI action uses the same idempotent API and produces an audit event; destructive actions are revocation, supersession, or policy-governed erasure; restricted names and failure details are redacted at the API; no screen bypasses review, verification, or tenant boundaries.
+Production events use an envelope containing event ID, type, schema version, tenant, source, subject, occurred/observed times, correlation and \atxn IDs, payload hash, and trace context. Consumers are idempotent. The local outbox persists tenant, event ID/type, aggregate ID, idempotency key, JSON payload, creation/completion times, delivery state, attempt budget, lease owner/expiry, fencing token, next attempt, and last error. Its bounded dispatcher completes, exponentially retries, or dead-letters under owner/fence checks. Schema-version and distributed-trace fields remain contracts for the deployment broker adapter. Required event families are:
+\begin{itemize}
+  \item source and policy: \code{source.version.changed}, \code{policy.epoch.changed}, \code{permission.revoked};
+  \item task and evidence: \code{task.state.changed}, \code{artifact.evidence\_committed}, \code{claim.validity\_changed};
+  \item dissemination: \idcode{artifact.publication_requested}, \idcode{artifact.published}, \idcode{artifact.publication_failed};
+  \item workflow: \code{review.completed}, \code{job.dead\_lettered}.
+\end{itemize}
 
 \section{Security for the First Slice}
 \label{sec:security}
@@ -563,7 +587,48 @@ Local demo identities (\code{analyst\_001}, \code{reviewer\_001}, \code{admin}) 
 
 Advance by exit gates, not calendar optimism. Each phase ends with executable proof in CI.
 
-\begin{longtable}{L{0.07\linewidth}L{0.14\linewidth}L{0.36\linewidth}L{0.33\linewidth}}
+\subsection{Initial Production Topology}
+
+Deploy the modular monolith as stateless API/runtime replicas behind a load balancer. Use managed PostgreSQL with point-in-time recovery, object storage with versioning, a managed queue, isolated worker pools, secret manager, identity provider, metrics/logs/traces backend, and a private network path to customer sources. Separate development, staging, and production accounts. Infrastructure is declarative and reviewed.
+
+Run interactive and scheduled workloads in separate queues. Partition workers by tool type and risk. Use \atxn IDs and idempotency keys across retries. Database transactions own state transitions; queue acknowledgements occur only after durable state is written. Long operations renew leases and checkpoints.
+
+\subsection{When to Extract Services}
+
+Do not distribute the system prematurely. Extract a component only when one of these conditions is measured: tool workers require a stronger isolation boundary; connector traffic has independent scaling; context indexes exceed primary-database capacity; invalidation fan-out interferes with interactive latency; enterprise deployment requires separate data planes; or team ownership demands an independent release cycle. Preserve the same typed contracts when extracting.
+
+\subsection{Scaling Strategy}
+
+Scale persistent memory and model context independently. Keep structured filters in the database, move large blobs to object storage, and introduce a dedicated lexical/vector candidate index behind the memory interface when needed. Shard by tenant before sharding within a tenant. Maintain reverse dependency indexes for invalidation. Cache only version-addressed, permission-scoped results; policy-epoch changes evict them.
+
+Capacity planning tracks active tenants, memory objects, version rate, dependency edges, scheduled tasks, tool concurrency, result bytes, model tokens, p50/p95/p99 control-path latency, queue age, and invalidation fan-out. Load tests include one-million-object tenants, policy churn, source delay, and noisy neighbors.
+
+\section{Operations, Reliability, and Support}
+
+\subsection{Service Objectives}
+
+Initial paid-pilot objectives are 99.5\% API availability, 99\% successful scheduled runs excluding declared source outages, p95 admission/context compilation below two seconds at the supported scale, zero confirmed cross-tenant or permission leaks, and 100\% of final artifacts with complete claim/evidence manifests. Objectives tighten only after error budgets and workload shape are understood.
+
+\subsection{Observability}
+
+Every request carries request, \atxn, tenant, job, plan, execution, artifact, publication, and trace IDs. Metrics cover task outcomes, verifier results by rule, context role coverage, retrieval leaks, repair counts, review backlog, capability denials, query cost, model cost, queue age, source health, invalidation lag, publication acknowledgment, replay success, and storage growth. Logs are structured, redacted, immutable according to policy, and linked to traces. Customer-visible status distinguishes \amos failure from source or provider failure.
+
+\subsection{Runbooks}
+
+Ship runbooks for source authentication failure, permission leak suspicion, policy epoch mismatch, stuck transaction, worker compromise, runaway query, queue backlog, database failover, object-store mismatch, invalidation storm, replay mismatch, model-provider outage, and data erasure. Each runbook specifies trigger, containment, customer impact, evidence preservation, recovery, owner, and post-incident tests.
+
+Backups are restored in staging on a schedule. Target RPO is five minutes and RTO is one hour for the control plane during paid pilot, with a longer declared window for reconstructible artifacts. Disaster-recovery drills verify database, object, queue, key, and connector configuration recovery together.
+
+\section{Testing and Quality Gates}
+
+Testing mirrors the architecture rather than only happy-path answers.
+
+The current crate contains 61 passing unit, API, end-to-end, security, concurrency, migration, failure-injection, privacy, and recovery tests. In addition to the original controls, they cover crash recovery at fourteen lifecycle checkpoints, checksummed schema migration, durable connector cursors, full capability rebinding, SQL cancellation and incremental byte limits, transitive invalidation continuations, persisted replay comparisons, outbox retry/dead-letter delivery, lost object-promotion acknowledgments, retention/legal hold/erasure, opaque cursors, request limits, and browser security headers. Appendix~I maps the named tests to their control boundaries. Production database isolation, customer connector conformance, KMS, worker containers, and disaster recovery remain infrastructure release gates rather than claims implied by this suite.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\linewidth}{L{0.20\linewidth}Y Y}
 \toprule
 \textbf{Phase} & \textbf{State} & \textbf{Build} & \textbf{Exit gate} \\
 \midrule
@@ -583,17 +648,110 @@ Advance by exit gates, not calendar optimism. Each phase ends with executable pr
 
 \subsection{When to extract services}
 
-Extract a component only when measured: tool workers need a stronger isolation boundary; connector traffic scales independently; context indexes exceed primary-store capacity; invalidation fan-out harms interactive latency; or enterprise deployment requires a separate data plane. Preserve the same typed contracts when extracting.
+Preserve architectural boundaries in code before extracting network services. The current Rust modular monolith uses the following repository shape:
 
-\subsection{Incident runbooks for the slice}
+\small
+\begin{verbatim}
+src/domain.rs             IDs, values, states, claims, jobs, results
+src/auth.rs               identity-provider port and explicit demo provider
+src/policy.rs             memory, task, tool, review, and read authorization
+src/store.rs              schema, repositories, CAS, atomic commits, outbox
+src/memory.rs             write, retrieve, reconcile, supersede, compact
+src/context.rs            required-role compiler and manifest construction
+src/connectors.rs         connector port and SQLite warehouse adapter
+src/workers.rs            capability issuer and SQL/statistics/chart workers
+src/verification.rs       SQL AST, schema, metric, freshness, claim checks
+src/evidence.rs           citations, review feedback, invalidation entry
+src/scheduler.rs          leased jobs, fencing, retry, dead-letter behavior
+src/runtime.rs            complete A-TXN orchestration and replay
+src/api.rs                Axum /v1 API and four server-rendered UI surfaces
+src/seed.rs               deterministic governed-memory and warehouse fixture
+src/main.rs               fail-closed demo CLI and HTTP server
+tests/                    API, security, concurrency, and end-to-end contracts
+docs/                     traceability and independent evaluation protocols
+artifacts/evaluation/     frozen result bundles and integrity hashes
+\end{verbatim}
+\normalsize
 
-Ship runbooks for: source authentication failure; permission-leak suspicion; policy-epoch mismatch; stuck transaction; stale worker lease; runaway query; replay mismatch. Each specifies trigger, containment, customer impact, evidence preservation, recovery, and owner. Broader DR theater waits for Phase~7.
+\begin{samepage}
+The public library re-exports \code{AmosRuntime}, \code{RuntimeConfig}, \code{AmosError}, and \code{Result}, while exposing each module for embedding applications. Domain code imports serialization, hashing, time, and ID libraries but no web framework, database driver, model SDK, or connector implementation. The runtime composes typed services; transactional state changes and their outbox events commit together. The current \code{Store} is the only table-writing component. Production architecture tests must additionally enforce dependency direction, table ownership, tenant-scoped repositories, and credential absence from model-visible values.
+\end{samepage}
 
 \section{Current Implementation Status}
 
 The repository implements the first production slice as a Rust modular monolith. SQLite supplies reproducible local warehouse and control-plane adapters; domain contracts remain independent of SQLite, Axum, or any model SDK.
 
-Already demonstrated by the vertical slice and regression suite:
+The vertical slice is complete when a user request or schedule produces: admitted transaction; versioned context manifest; verified SQL executions; result and chart hashes; structured claims; review-aware report; claim dependencies; replay package; audit trail; and explicit terminal outcome. A fluent report without these records is not an AMOS product slice.
+
+\subsection{Team and Ownership}
+
+A five-person initial team is sufficient: founding architect/product lead; memory/connectors engineer; runtime/tools engineer; product/review engineer; and design-partner/data lead. Assign one named owner for security and operations even if the role is fractional. Every architectural component in Table 3 has a code owner and operational owner before paid pilot.
+
+\section{Current Rust Implementation to Production}
+
+As completed on 2026-07-19, the repository is a Rust 2024 crate at version 0.2.0. The original audited inventory of 236 production declarations remains present or is intentionally superseded by cleaner typed recovery, migration, publication, retention, dispatch, observability, and bounded-execution APIs. The control schema is at checksummed version 6 and the executable suite contains 61 tests plus a reproducible capacity benchmark. Formatting, Clippy with warnings denied, debug and release tests, optimized build, and Rustdoc are release gates. Appendix~I records exact local evidence without treating external infrastructure as implemented.
+
+The implementation completes the local payment-health vertical slice: indexed permission-first memory, exact role compilation, durable source observation events, deterministic planning, a frozen SQL subset, constant-time verified capabilities, cancellable bounded execution, independently verified claims and charts, atomic evidence, review, transitive invalidation, fenced workers and dispatch, state-driven recovery, persisted level-3 replay comparisons, hash-checked object promotion, metrics, and privacy erasure. It is intentionally not equivalent to managed PostgreSQL/RLS, enterprise identity/KMS, customer connectors, isolated worker infrastructure, or cloud publication topology.
+
+\begin{table}[ht]
+\centering
+\scriptsize
+\begin{tabularx}{\linewidth}{L{0.22\linewidth}Y Y}
+\toprule
+\textbf{Area} & \textbf{Implemented Rust MVP} & \textbf{Production completion work} \\
+\midrule
+State store & SQLite WAL; typed/indexed rows; atomic evidence, review, validity, retention, erasure, publication, outbox, and job effects; checksummed schema ledger. & PostgreSQL forced RLS, HA/PITR, online DDL, regional backup and restore. \\
+Transactions & Normative \atxn guard, CAS, immutable admission, version vectors, fences, deterministic checkpoint identities, and state-driven recovery tested across fourteen boundaries. & Distributed controller election and remote worker placement. \\
+Connectors & Typed port and SQLite adapter with stable versions, capability-bound reads, validation, durable deduplicated cursor events, restart recovery, and health. & Customer warehouse/IAM/catalog/document credentials, quotas, retry certification, and C1/C2 fixtures. \\
+Runtime & Deterministic payment workflow, bounded repair, statistics/chart, claims, review/revalidation, durable replay evidence, object promotion, and a bounded blocking lane. & General model router, additional task packs, and isolated worker services where measured. \\
+Verification & Frozen AST subset; schema/metric/time/function rules; cancellation; incremental limits; referential, numeric, statistical, and chart-hash recomputation. & Calibrated task-specific rule packs and driver conformance beyond SQLite. \\
+Provenance & Typed claims/edges, six validity dimensions, transitive quota traversal, consumed continuation cursors, replay comparisons, retention and erasure receipts. & Signed customer export formats and long-term data-platform version leases. \\
+API/UI & Authenticated \code{/v1}, explicit mutation keys, stable errors, request/correlation IDs, 1 MiB cap, opaque artifact cursors, OpenAPI 3.1 endpoint, CSP and security headers. & Enterprise SSO/session adapter, SDK distribution, tenant quota configuration, and streaming progress. \\
+Operations & Leased job and outbox loops, fence/owner/expiry checks, retry/dead letter, shutdown, metrics, structured traces, audit, connector and migration health. & Telemetry backend, SLO alerts, on-call, broker, backup/DR and regional deployment. \\
+Security & Fail-closed binary/provider port, tenant/epoch/label enforcement, constant-time full-bound capabilities, query-only SQL, cancellation, HTML escaping and browser headers. & Enterprise OIDC, database RLS, KMS keys, container/VM sandbox, egress and credential broker. \\
+\bottomrule
+\end{tabularx}
+\caption{The production plan extends verified Rust behavior without presenting local adapters as managed infrastructure.}
+\end{table}
+
+\section{Low-Level Execution and Performance Engineering}
+
+\subsection{Hot-Path Cost Model}
+
+Let $M$ be active tenant memory objects, $T$ the number of normalized request terms, $K$ the context-item budget, $S$ the plan-step count, $N_q$ the SQL AST size, $R$ returned rows, $C$ returned columns, $B_o$ serialized output bytes, $E$ dependency edges, and $P$ the invalidation page size. The current implementation has the following dominant costs:
+
+\begin{longtable}{L{0.25\linewidth}L{0.27\linewidth}L{0.40\linewidth}}
+\toprule
+\textbf{Path} & \textbf{Current bound} & \textbf{Engineering consequence} \\
+\midrule
+\endhead
+Memory retrieval & Indexed FTS candidate generation plus $O(C\log K)$ bounded ranking for $C\leq 2000$ & Tenant, lifecycle, interval, type, and all-label permission predicates execute in SQLite before objects enter Rust; a bounded heap retains only top-$K$. The capacity benchmark reports p50/p95/p99 and enforces a release p95 threshold. \\
+Reconciliation & $O(M\log M)$ time, $O(M)$ grouping & Objects group by type and logical key, then sort by authority and record time. A preordered database candidate stream or per-key best-candidate reduction removes full-group sorts. \\
+Context compilation & Retrieval plus $O(KR_d)$ role scans & Each required/optional role scans reconciled candidates; $R_d$ is role count. Index candidates by \code{(MemoryType, role)} inside the compile call when role or candidate counts grow. \\
+SQL verification & Approximately $O(N_q\log C_s)$ & \code{sqlparser} walks the AST and inserts references into ordered sets; schema/filter checks follow. This is bounded by query length and selected schema size, not warehouse rows. \\
+SQL execution & $O(RC + B_o)$ time and $O(B_o)$ memory & Each row is encoded and charged against the byte budget before it enters the result vector; the progress handler enforces time and explicit cancellation. Production remote workers should stream large outputs directly to content-addressed object storage. \\
+Evidence commit & $O(C_l + E)$ statements & Claims and edges are inserted individually inside one immediate transaction. PostgreSQL should use prepared/batched inserts while retaining a single atomic commit. \\
+Invalidation & $O(\log E + P)$ indexed lookup and updates & Reverse-edge indexes bound a page to at most 250 claims; each changed claim creates a job and outbox event. A leased worker consumes the durable cursor, retains the root visited set, and idempotently schedules another page until traversal completes or its quota fails closed. \\
+Job acquisition & Indexed ready/expired-job lookup plus one CAS update & SQLite serializes the immediate write transaction. PostgreSQL should use \code{FOR UPDATE SKIP LOCKED}, retain monotonically increasing fences, and keep lease mutation atomic with events. \\
+\bottomrule
+\caption{Asymptotic and allocation model of the current Rust implementation.}
+\end{longtable}
+
+\subsection{Concurrency, Allocation, and I/O}
+
+\code{Store} wraps one \code{rusqlite::Connection} in \code{Arc<Mutex<...>>}; cloned services share it and therefore serialize database access within a runtime. WAL permits useful concurrency across separately opened stores. Immediate write transactions, state sequences, and fencing tokens prevent lost updates. All asynchronous-facing database and warehouse work enters an eight-permit \code{spawn\_blocking} lane, so the Tokio executor is not blocked and admission is bounded. Production PostgreSQL adapters still require a measured connection pool, lock/queue telemetry, and the same CAS predicates.
+
+The SQL worker opens a connection per execution, enables \code{query\_only}, disables trusted schema, installs a SQLite progress callback, and materializes only rows that fit the incremental row and byte budgets. Deadline and explicit cancellation both interrupt the statement. Capabilities expire after 60 seconds; constant-time HMAC verification binds issuer, audience, tenant, \atxn, plan, step, subject, tool, source, operations, relations, limits, policy epoch, fence, and token ID at both connector and worker boundaries. Production remote workers must additionally obtain short-lived source credentials without ambient process access.
+
+Hashes are SHA-256 over fallibly serialized values; serialization failures propagate and cannot alias empty content. Runtime entity IDs are typed UUIDv7 values, while durable checkpoint and event identities use typed prefixes plus 128 bits of the serialized-value digest. JSON payloads keep the local adapter simple; indexed scalar columns remain authoritative for concurrency, filtering, and lifecycle state.
+
+\subsection{Performance Gates}
+
+Optimization is accepted only with a workload, correctness oracle, and before/after evidence. The paid-pilot gate records p50/p95/p99 for admission, context compilation, verification, execution, evidence commit, review commit, job acquisition, invalidation page, and replay; peak resident memory; allocations per selected context item and output row; database lock/pool wait; rows and bytes scanned/returned; and outbox/job age. Benchmarks cover $10^4$, $10^5$, and $10^6$ memory objects, skewed permission labels, conflicting authority versions, large SQL outputs, 100--250-claim invalidation pages, expired lease storms, duplicate admissions/reviews, and concurrent tenants. No optimization may weaken permission-before-ranking, source-version immutability, compare-and-swap, fencing, atomic evidence, or claim-level provenance.
+
+\section{Architecture Decisions and Non-Goals}
+
+Key decisions are explicit:
 \begin{itemize}
   \item typed memory, permission-first context, A-TXN state machine with CAS and fencing;
   \item read-only SQL worker with signed capabilities; statistics and chart workers;
@@ -1050,5 +1208,88 @@ Supersession state & active, superseded, tombstoned & New artifact/claim version
   }
 }
 \end{lstlisting}
+
+\subsection{Validity Transition Rules}
+
+\begin{longtable}{L{0.21\linewidth}L{0.25\linewidth}L{0.41\linewidth}}
+\toprule
+\textbf{Dimension} & \textbf{Representative states} & \textbf{Transition cause} \\
+\midrule
+\endhead
+Publication validity & draft, valid\_at\_publication, publication\_failed, revoked & Evidence and review state at publication; external adapter acknowledgment; later revocation. \\
+Semantic validity & current, pending\_revalidation, stale, invalid & Metric/schema/data/document change and verifier outcome. \\
+Policy visibility & allowed, redacted, denied & Current subject, audience, policy epoch, retention, or legal hold. \\
+Replay availability & level\_0--level\_4, degraded, expired & Retained evidence, C2 lease, tool environment, template, and policy package. \\
+Review state & unreviewed, needs\_review, approved, corrected, rejected & Authorized review append; correction never overwrites prior evidence. \\
+Supersession state & active, superseded, tombstoned & New artifact/claim version, owner action, or erasure policy. \\
+\bottomrule
+\caption{Validity dimensions remain independent so historical truth is not confused with current usability.}
+\end{longtable}
+
+\clearpage
+\subsection{Review and Source-Change Sequences}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.95cm,y=0.62cm]
+\node[seqactor] (u) at (0,0) {Reviewer};
+\node[seqactor] (a) at (4,0) {Review API};
+\node[seqactor] (d) at (8,0) {PostgreSQL};
+\node[seqactor] (i) at (12,0) {Invalidator};
+\node[seqactor] (c) at (16,0) {Context compiler};
+\foreach \n in {u,a,d,i,c}{\draw[seqlife] (\n.south) -- ++(0,-5.6);}
+\draw[seqmsg] (0,-0.9)--node[above,font=\tiny]{scoped correction}(4,-0.9);
+\draw[seqmsg] (4,-1.8)--node[above,font=\tiny]{policy + authority check}(8,-1.8);
+\draw[seqmsg] (4,-2.7)--node[above,font=\tiny]{append review + feedback + outbox}(8,-2.7);
+\draw[seqmsg] (8,-3.6)--node[above,font=\tiny]{affected targets}(12,-3.6);
+\draw[seqmsg] (12,-4.5)--node[above,font=\tiny]{validity changes; no history edit}(8,-4.5);
+\draw[seqmsg] (8,-5.4)--node[above,font=\tiny]{next task selects correction}(16,-5.4);
+\end{tikzpicture}
+\caption{Human review creates governed feedback while preserving the original artifact.}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.95cm,y=0.62cm]
+\node[seqactor] (s) at (0,0) {Connector};
+\node[seqactor] (e) at (4,0) {Event inbox};
+\node[seqactor] (i) at (8,0) {Invalidator};
+\node[seqactor] (d) at (12,0) {PostgreSQL};
+\node[seqactor] (r) at (16,0) {Reviewer};
+\foreach \n in {s,e,i,d,r}{\draw[seqlife] (\n.south) -- ++(0,-5.8);}
+\draw[seqmsg] (0,-0.8)--node[above,font=\tiny]{version changed + dedup key}(4,-0.8);
+\draw[seqmsg] (4,-1.6)--node[above,font=\tiny]{claim impact job}(8,-1.6);
+\draw[seqmsg] (8,-2.4)--node[above,font=\tiny]{reverse dependency page}(12,-2.4);
+\draw[seqmsg] (8,-3.2)--node[above,font=\tiny]{set pending\_revalidation}(12,-3.2);
+\draw[seqmsg] (8,-4.0)--node[above,font=\tiny]{bounded verification}(12,-4.0);
+\draw[seqmsg] (8,-4.8)--node[above,font=\tiny]{dimension updates + outbox}(12,-4.8);
+\draw[seqmsg] (12,-5.6)--node[above,font=\tiny]{review only where required}(16,-5.6);
+\end{tikzpicture}
+\caption{Source-change invalidation is deduplicated, paged, bounded, and dimension-specific.}
+\end{figure}
+
+\subsection{Replay Sequence}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.95cm,y=0.62cm]
+\node[seqactor] (u) at (0,0) {User};
+\node[seqactor] (a) at (4,0) {Replay API};
+\node[seqactor] (d) at (8,0) {Evidence store};
+\node[seqactor] (w) at (12,0) {Worker};
+\node[seqactor] (v) at (16,0) {Comparator};
+\foreach \n in {u,a,d,w,v}{\draw[seqlife] (\n.south) -- ++(0,-5.8);}
+\draw[seqmsg] (0,-0.8)--node[above,font=\tiny]{request level}(4,-0.8);
+\draw[seqmsg] (4,-1.6)--node[above,font=\tiny]{authorize + inspect package}(8,-1.6);
+\draw[seqmsg] (8,-2.4)--node[above,font=\tiny]{retained inputs + expected hashes}(4,-2.4);
+\draw[seqmsg] (4,-3.2)--node[above,font=\tiny]{scoped replay capability}(12,-3.2);
+\draw[seqmsg] (12,-4.0)--node[above,font=\tiny]{new outputs + hashes}(16,-4.0);
+\draw[seqmsg] (16,-4.8)--node[above,font=\tiny]{exact/equivalent/different + causes}(4,-4.8);
+\draw[seqmsg] (4,-5.6)--node[above,font=\tiny]{new audit record; original unchanged}(0,-5.6);
+\end{tikzpicture}
+\caption{Replay creates new evidence and a comparison; it never rewrites the original run.}
+\end{figure}
+
+\input{implementation_reference}
 
 \end{document}

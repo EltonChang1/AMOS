@@ -13,6 +13,8 @@ use amos::{AmosRuntime, Result, RuntimeConfig, api, seed};
 struct Cli {
     #[arg(long, default_value = ".")]
     root: PathBuf,
+    #[arg(long, env = "AMOS_DEMO")]
+    demo: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -35,6 +37,8 @@ enum Command {
         artifact_id: String,
         #[arg(long, default_value = "analyst_001")]
         identity: String,
+        #[arg(long)]
+        idempotency_key: String,
     },
 }
 
@@ -44,7 +48,12 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let cli = Cli::parse();
-    let config = RuntimeConfig::local(&cli.root);
+    if !cli.demo {
+        return Err(amos::AmosError::Validation(
+            "the bundled binary has no production identity provider; use --demo only for the explicit local demo, or embed amos::api::router with an IdentityProvider".into(),
+        ));
+    }
+    let config = RuntimeConfig::demo(&cli.root);
     match cli.command.unwrap_or(Command::Serve {
         port: 8000,
         seed_demo: false,
@@ -60,14 +69,16 @@ async fn main() -> Result<()> {
                 seed::seed_demo(&store, &config.warehouse_db)?;
             }
             let runtime = AmosRuntime::open(config)?;
-            let app = api::router(runtime);
+            let app = api::demo_router(runtime);
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
                 .await
                 .map_err(|e| amos::AmosError::Storage(e.to_string()))?;
             println!("AMOS listening on http://127.0.0.1:{port}");
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
-                    let _ = tokio::signal::ctrl_c().await;
+                    if let Err(error) = tokio::signal::ctrl_c().await {
+                        tracing::error!(%error, "failed to install Ctrl-C shutdown listener");
+                    }
                 })
                 .await
                 .map_err(|e| amos::AmosError::Storage(e.to_string()))?;
@@ -81,7 +92,7 @@ async fn main() -> Result<()> {
             let identities = api::demo_identities();
             let identity = identities
                 .get(&identity)
-                .ok_or_else(|| amos::AmosError::PermissionDenied("unknown identity".into()))?;
+                .ok_or_else(|| amos::AmosError::Unauthenticated("unknown identity".into()))?;
             let result = runtime
                 .run_task(identity, request, amos::domain::new_id("cli"))
                 .await?;
@@ -90,15 +101,20 @@ async fn main() -> Result<()> {
         Command::Replay {
             artifact_id,
             identity,
+            idempotency_key,
         } => {
             let runtime = AmosRuntime::open(config)?;
             let identities = api::demo_identities();
             let identity = identities
                 .get(&identity)
-                .ok_or_else(|| amos::AmosError::PermissionDenied("unknown identity".into()))?;
+                .ok_or_else(|| amos::AmosError::Unauthenticated("unknown identity".into()))?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&runtime.replay(identity, &artifact_id)?)?
+                serde_json::to_string_pretty(
+                    &runtime
+                        .replay_async(identity, artifact_id, idempotency_key)
+                        .await?,
+                )?
             );
         }
     }
