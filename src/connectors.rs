@@ -89,11 +89,6 @@ impl SqliteWarehouseConnector {
         }
     }
 
-    pub fn with_page_size(mut self, page_size: usize) -> Self {
-        self.page_size = page_size.max(1);
-        self
-    }
-
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -168,62 +163,20 @@ impl SqliteWarehouseConnector {
         Ok(connection)
     }
 
-    fn open_connection(&self) -> Result<Connection> {
-        if !self.path.exists() {
-            return Err(AmosError::Connector(
-                "warehouse source unavailable: database file missing".into(),
-            ));
-        }
-        Connection::open(&self.path)
-            .map_err(|error| AmosError::Connector(format!("warehouse source unavailable: {error}")))
-    }
-
     fn schema_snapshot(&self, reference: &str) -> Result<Value> {
-        let connection = self.open_connection()?;
-        let table = reference.strip_prefix("table:").unwrap_or(reference);
-        let exists: bool = connection
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
-                [table],
-                |row| row.get(0),
-            )
+        let connection = Connection::open(&self.path)
             .map_err(|error| AmosError::Connector(error.to_string()))?;
-        if !exists {
-            return Err(AmosError::NotFound(format!(
-                "table {table} deleted or unavailable"
-            )));
-        }
+        let table = reference.strip_prefix("table:").unwrap_or(reference);
         let mut statement = connection.prepare(&format!(
             "PRAGMA table_info('{}')",
             table.replace('\'', "''")
         ))?;
-        let columns = statement
-            .query_map([], |row| {
-                Ok(json!({
-                    "name": row.get::<_, String>(1)?,
-                    "type": row.get::<_, String>(2)?,
-                    "not_null": row.get::<_, bool>(3)?
-                }))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let columns = statement.query_map([], |row| Ok(json!({"name":row.get::<_,String>(1)?,"type":row.get::<_,String>(2)?,"not_null":row.get::<_,bool>(3)?})))?
+            .collect::<std::result::Result<Vec<_>,_>>()?;
         if columns.is_empty() {
             return Err(AmosError::NotFound(format!("table {table}")));
         }
-        Ok(json!({"table": table, "columns": columns}))
-    }
-
-    fn list_tables(&self, scope: &str) -> Result<Vec<String>> {
-        let connection = self.open_connection()?;
-        let mut statement = connection.prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-        )?;
-        let names = statement
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(names
-            .into_iter()
-            .filter(|name| scope == "*" || name.contains(scope))
-            .collect())
+        Ok(json!({"table":table,"columns":columns}))
     }
 }
 
@@ -234,20 +187,11 @@ impl Connector for SqliteWarehouseConnector {
     }
 
     async fn discover(&self, scope: &str, cursor: Option<&str>) -> Result<Page<EntityRef>> {
-        let names = self.list_tables(scope)?;
-        let start = cursor
-            .and_then(|value| {
-                names
-                    .iter()
-                    .position(|name| name == value)
-                    .map(|idx| idx + 1)
-            })
-            .unwrap_or(0);
-        if cursor.is_some() && start == 0 {
-            return Err(AmosError::Validation(format!(
-                "discover cursor '{}' is unknown for scope '{scope}'",
-                cursor.unwrap_or_default()
-            )));
+        if cursor.is_some() {
+            return Ok(Page {
+                items: vec![],
+                next_cursor: None,
+            });
         }
         let connection = Connection::open(&self.path)
             .map_err(|error| AmosError::Connector(error.to_string()))?;
@@ -256,15 +200,16 @@ impl Connector for SqliteWarehouseConnector {
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(Page {
-            items: page_names
-                .iter()
+            items: names
+                .into_iter()
+                .filter(|name| scope == "*" || name.contains(scope))
                 .map(|name| EntityRef {
                     source_id: self.source_id.clone(),
                     reference: format!("table:{name}"),
                     entity_type: "relation".into(),
                 })
                 .collect(),
-            next_cursor,
+            next_cursor: None,
         })
     }
 
@@ -377,7 +322,10 @@ impl Connector for SqliteWarehouseConnector {
     }
 
     async fn health(&self) -> Result<ConnectorHealth> {
-        self.open_connection()?;
+        if !self.path.is_file() {
+            return Err(AmosError::Connector("warehouse file is unavailable".into()));
+        }
+        Connection::open(&self.path).map_err(|error| AmosError::Connector(error.to_string()))?;
         Ok(ConnectorHealth {
             source_id: self.source_id.clone(),
             status: "healthy".into(),

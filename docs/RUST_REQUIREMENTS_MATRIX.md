@@ -1,6 +1,6 @@
 # AMOS Rust implementation requirements
 
-This matrix makes the two manuscripts executable. The research paper defines the memory-operating kernel; the build guide defines the first production slice, cut list, and Specifications A–F.
+This matrix makes the two manuscripts executable. The research paper defines the memory-operating kernel; the design proposal defines the complete first production slice and its Specifications A-F.
 
 ## Research-paper kernel
 
@@ -11,14 +11,13 @@ This matrix makes the two manuscripts executable. The research paper defines the
 | Permission-first retrieval | `policy::PolicyEngine` before scoring and again before execution/publication |
 | Effective time, authority, supersession | `memory::retrieve`, `memory::reconcile`, `memory::supersede` |
 | Core primitives | `retrieve`, `write`, `supersede`, `reconcile`, `compact`, `verify`, `cite`, `replay` |
-| Publication invariants I1–I5 | Enforced across `context`, `verification`, `evidence`, and `runtime` commit paths |
 | Pre-execution verification | `verification::Verifier` over typed plans and parsed read-only SQL |
 | Claim-level provenance | `evidence::EvidenceService` and typed `DependencyEdge` records |
 | Durable feedback | `evidence::review` uses an idempotent atomic commit for the review, exact claim-state changes, governed feedback, audit, revalidation job, and outbox; history is immutable |
 | Replay | `runtime::replay` creates a separate replay A-TXN, fenced executions, exact/equivalent/different comparisons, audit, and outbox state without changing the original |
 | Explicit outcomes | `Outcome::{Pass, Warning, Repair, NeedsReview, Reject, Abort}` |
 
-## Build-guide first-slice contracts
+## Design-proposal production contracts
 
 | Specification | Required Rust behavior |
 |---|---|
@@ -52,10 +51,6 @@ This matrix makes the two manuscripts executable. The research paper defines the
 ## First production slice
 
 The executable slice is deliberately bounded to a configured tenant, one read-only SQL source, the payment-failure metric family, three query shapes, one structured chart, one report template, and one reviewer role. A successful run persists an admitted transaction, connector observations, context manifest, typed plan, verified executions, result/chart hashes, structured claims, dependency edges, replay package, audit trail, and explicit outcome. Approved review obligations advance through revalidation, hash-checked object promotion, and local publication; corrections append governed feedback without mutating original evidence.
-
-## Cut until earned
-
-General Python workers, free-form claim extraction, vector indexes, autonomous external publication, multi-tenant SSO fleets, customer-managed keys, regional data planes, hybrid retrieval, and controlled autonomy stay out of the first slice. Production PostgreSQL/RLS, object storage, KMS/secret management, SSO, and customer warehouse connectors are deployment adapters behind existing ports, not alternate domain logic.
 
 ## External boundaries
 

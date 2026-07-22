@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::process::Command;
 
 use amos::{
@@ -214,6 +215,209 @@ async fn versioned_api_exposes_the_complete_local_mvp_contract() {
             .as_u64()
             .unwrap()
             >= 1
+    );
+}
+
+#[tokio::test]
+async fn openapi_documents_every_versioned_route_and_public_security_boundary() {
+    let (_root, app) = app();
+    let (status, body) = request_raw(&app, "GET", "/v1/openapi.json", None, vec![], None).await;
+    assert_eq!(status, StatusCode::OK);
+    let document: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(document["openapi"], "3.1.0");
+    assert_eq!(document["security"][0]["bearerAuth"], json!([]));
+    assert_eq!(
+        document["paths"]["/v1/openapi.json"]["get"]["security"],
+        json!([])
+    );
+
+    let documented = document["paths"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected = BTreeSet::from([
+        "/v1/artifacts",
+        "/v1/artifacts/page",
+        "/v1/artifacts/{id}",
+        "/v1/artifacts/{id}/replay",
+        "/v1/artifacts/{id}/revalidate",
+        "/v1/artifacts/{id}/reviews",
+        "/v1/audit",
+        "/v1/claims/{id}",
+        "/v1/connectors/health",
+        "/v1/jobs",
+        "/v1/memory",
+        "/v1/memory/search",
+        "/v1/memory/{id}/supersede",
+        "/v1/metrics",
+        "/v1/openapi.json",
+        "/v1/replay/{id}",
+        "/v1/retention",
+        "/v1/retention/memory/{id}/erase",
+        "/v1/reviews",
+        "/v1/source-events/process",
+        "/v1/tasks",
+        "/v1/tasks/{id}",
+        "/v1/transactions/{id}",
+        "/v1/verify/sql",
+    ]);
+    assert_eq!(documented, expected);
+
+    for path in expected {
+        for operation in document["paths"][path].as_object().unwrap().values() {
+            assert!(operation["operationId"].is_string(), "{path}");
+            assert!(operation["responses"].is_object(), "{path}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn four_product_surfaces_expose_the_governed_demo_and_safe_role_actions() {
+    let (_root, app) = app();
+    let (status, body) = request(
+        &app,
+        "POST",
+        "/v1/tasks",
+        "analyst_001",
+        Some(json!({
+            "request":"Why did payment failure rate increase over the last six hours?",
+            "idempotency_key":"surface-walkthrough"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run: RunResult = serde_json::from_slice(&body).unwrap();
+
+    for (uri, identity, expected) in [
+        ("/", "analyst_001", "Recent policy-visible work"),
+        ("/memory", "analyst_001", "Provenance"),
+        ("/reviews", "reviewer_001", "Record a consequential review"),
+        ("/operations", "admin", "Outbox delivery"),
+    ] {
+        let (status, body) = request(&app, "GET", uri, identity, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        let html = String::from_utf8(body).unwrap();
+        assert!(html.contains(expected), "{uri}: {expected}");
+        assert!(html.contains("<nav>"), "{uri}");
+        assert!(!html.contains("name=\"identity\""), "{uri}");
+        if uri == "/reviews" {
+            assert!(html.contains("Append correction"));
+            assert!(html.contains("Structured correction"));
+        }
+        if uri == "/operations" {
+            assert!(html.contains("Retention and privacy"));
+            assert!(html.contains("I confirm this irreversible content erasure"));
+        }
+    }
+
+    let (status, body) = request_raw(
+        &app,
+        "POST",
+        "/ui/memory/search",
+        Some("Bearer analyst_001"),
+        b"task_text=payment+failure+metric".to_vec(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("Permission-first results")
+    );
+
+    let (status, _) = request_raw(
+        &app,
+        "POST",
+        "/ui/memory/notes",
+        Some("Bearer analyst_001"),
+        b"logical_key=note%3Apayment-ui&summary=Observed+retry+pattern&content=Needs+review"
+            .to_vec(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = request(&app, "GET", "/v1/memory", "analyst_001", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let note = serde_json::from_slice::<Vec<Value>>(&body)
+        .unwrap()
+        .into_iter()
+        .find(|object| object["logical_key"] == "note:payment-ui")
+        .unwrap();
+    assert_eq!(note["authority"], "user_note");
+    assert_eq!(note["governing"], false);
+
+    let memory_id = &run.manifest.required_role_coverage["active_schema"][0];
+    let retention_body = format!(
+        "idempotency_key=surface-retention&target_type=memory&target_id={memory_id}&retained_until=2030-01-01T00%3A00%3A00Z&reason=Local+legal+review&confirmation=confirmed"
+    );
+    let (status, body) = request_raw(
+        &app,
+        "POST",
+        "/ui/retention",
+        Some("Bearer admin"),
+        retention_body.into_bytes(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("Retention updated")
+    );
+
+    let (status, body) = request_raw(
+        &app,
+        "POST",
+        &format!("/ui/artifacts/{}/replay", run.artifact.artifact_id),
+        Some("Bearer analyst_001"),
+        b"idempotency_key=surface-replay".to_vec(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(body).unwrap().contains("new fence"));
+
+    let claim_ids = run
+        .claims
+        .iter()
+        .map(|claim| claim.claim_id.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let review_body = format!(
+        "idempotency_key=surface-review&claim_ids={claim_ids}&decision=approve&comment=Evidence+reviewed&confirmation=confirmed"
+    );
+    let (status, body) = request_raw(
+        &app,
+        "POST",
+        &format!("/ui/artifacts/{}/reviews", run.artifact.artifact_id),
+        Some("Bearer reviewer_001"),
+        review_body.into_bytes(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    assert!(html.contains("Append-only review"));
+    assert!(html.contains("Published"));
+
+    let (status, body) = request_raw(
+        &app,
+        "POST",
+        "/ui/source-events/process",
+        Some("Bearer admin"),
+        vec![],
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("Source changes processed")
     );
 }
 
@@ -590,6 +794,62 @@ fn bundled_binary_initializes_demo_storage_only_when_demo_mode_is_explicit() {
     assert!(root.path().join("data/payments.sqlite").exists());
 }
 
+#[test]
+fn bundled_cli_run_requires_and_honors_a_caller_supplied_idempotency_key() {
+    let root = TempDir::new().unwrap();
+    let root_arg = root.path().to_str().unwrap();
+    let missing = Command::new(env!("CARGO_BIN_EXE_amos"))
+        .args([
+            "--demo",
+            "--root",
+            root_arg,
+            "run",
+            "--request",
+            "Investigate payment failures",
+        ])
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("--idempotency-key"));
+
+    let mut artifact_id = None;
+    let mut durable_counts = None;
+    for _ in 0..2 {
+        let output = Command::new(env!("CARGO_BIN_EXE_amos"))
+            .args([
+                "--demo",
+                "--root",
+                root_arg,
+                "run",
+                "--request",
+                "Investigate payment failures",
+                "--idempotency-key",
+                "cli-task-repeat",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run: RunResult = serde_json::from_slice(&output.stdout).unwrap();
+        match artifact_id.as_ref() {
+            Some(expected) => assert_eq!(expected, &run.artifact.artifact_id),
+            None => artifact_id = Some(run.artifact.artifact_id),
+        }
+        let store = Store::open(root.path().join("data/amos.sqlite")).unwrap();
+        let counts = (
+            store.list_audit(seed::TENANT, 250).unwrap().len(),
+            store.list_outbox(seed::TENANT, 500).unwrap().len(),
+        );
+        match durable_counts {
+            Some(expected) => assert_eq!(expected, counts),
+            None => durable_counts = Some(counts),
+        }
+    }
+}
+
 #[tokio::test]
 async fn transactions_artifacts_claims_and_replay_enforce_owner_and_policy_visibility() {
     let (root, app) = app();
@@ -747,7 +1007,7 @@ async fn ui_uses_authenticated_identity_and_cannot_be_upgraded_by_form_fields() 
         "POST",
         "/ui/tasks",
         Some("Bearer analyst_001"),
-        b"request=Why+did+payment+failures+increase%3F&identity=reviewer_001".to_vec(),
+        b"request=Why+did+payment+failures+increase%3F&idempotency_key=ui-identity-test&identity=reviewer_001".to_vec(),
         Some("application/x-www-form-urlencoded"),
     )
     .await;

@@ -32,6 +32,8 @@ enum Command {
         request: String,
         #[arg(long, default_value = "analyst_001")]
         identity: String,
+        #[arg(long)]
+        idempotency_key: String,
     },
     Replay {
         artifact_id: String,
@@ -83,7 +85,11 @@ async fn main() -> Result<()> {
                 .await
                 .map_err(|e| amos::AmosError::Storage(e.to_string()))?;
         }
-        Command::Run { request, identity } => {
+        Command::Run {
+            request,
+            identity,
+            idempotency_key,
+        } => {
             if !config.warehouse_db.exists() {
                 let store = amos::store::Store::open(&config.control_db)?;
                 seed::seed_demo(&store, &config.warehouse_db)?;
@@ -93,9 +99,7 @@ async fn main() -> Result<()> {
             let identity = identities
                 .get(&identity)
                 .ok_or_else(|| amos::AmosError::Unauthenticated("unknown identity".into()))?;
-            let result = runtime
-                .run_task(identity, request, amos::domain::new_id("cli"))
-                .await?;
+            let result = runtime.run_task(identity, request, idempotency_key).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Command::Replay {

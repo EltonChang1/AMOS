@@ -5,7 +5,7 @@ AMOS is a Rust-native operating layer between analytical agents and governed dat
 This repository implements the complete local production slice defined by the accompanying papers: one configured tenant, one read-only warehouse connector, the payment-failure metric family, deterministic statistics and charting, governed documents, typed report claims, reviewer approval or correction, transitive dependency invalidation, durable replay evidence, crash recovery, and local object publication.
 
 - [Research paper](papers/AMOS_research_paper.pdf): the memory-operating abstraction, core primitives, reference scenario, and evaluation.
-- [Build guide](papers/AMOS_design_proposal.pdf): the first production slice, cut list, build gates, and normative Specifications A–F.
+- [Design proposal](papers/AMOS_design_proposal.pdf): the product architecture and normative Specifications A–F.
 - [Rust requirements matrix](docs/RUST_REQUIREMENTS_MATRIX.md): direct traceability from both papers to implementation modules.
 
 ## What the MVP provides
@@ -51,6 +51,15 @@ The authenticated product surfaces are:
 - `/reviews` — Review Queue
 - `/operations` — Operations Console
 
+For an interactive browser walkthrough, configure a dedicated local browser
+profile or request-header rule to attach `Authorization: Bearer IDENTITY` to
+`http://127.0.0.1:8000/*`. Keep the credential in the header: never place it in
+a URL. Same-origin, server-rendered forms then preserve that header through the
+analysis, memory-search/write, replay, review/correction, source-event, and
+retention workflows. Switch the rule between `analyst_001`, `reviewer_001`, and
+`admin` when demonstrating role boundaries. The application intentionally does
+not create a weaker demo cookie or accept identity fields from forms.
+
 The explicit demo mode accepts local bearer identities `analyst_001`,
 `analyst_002`, `reviewer_001`, and `admin`. They exist only for local
 development and must be replaced by an enterprise identity provider in an
@@ -62,6 +71,7 @@ Run the reference analysis from the CLI:
 
 ```bash
 cargo run -- --demo run \
+  --idempotency-key payment-health-001 \
   --request "Why did payment failure rate increase over the last six hours, and should we update the executive dashboard?"
 ```
 

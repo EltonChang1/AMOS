@@ -495,7 +495,6 @@ impl AmosRuntime {
         atxn = self.advance(&atxn, AtxnState::Planning, None)?;
         let mut plan = self.build_plan(&atxn, &manifest)?;
         let mut verifications = vec![];
-        let mut executions = vec![];
         for index in 0..plan.steps.len() {
             let mut repairs = 0;
             loop {
@@ -509,13 +508,11 @@ impl AmosRuntime {
                 verifications.push(verification.clone());
                 if verification.outcome != Outcome::Repair {
                     if verification.outcome == Outcome::Reject {
-                        atxn = self.advance(&atxn, AtxnState::Repairing, None)?;
                         let _ = self.advance(&atxn, AtxnState::Rejected, Some(Outcome::Reject))?;
                         return Err(AmosError::Validation(verification.errors.join("; ")));
                     }
                     break;
                 }
-                atxn = self.advance(&atxn, AtxnState::Repairing, None)?;
                 if repairs >= definition.budgets.max_repairs {
                     let _ =
                         self.advance(&atxn, AtxnState::NeedsReview, Some(Outcome::NeedsReview))?;
@@ -527,8 +524,6 @@ impl AmosRuntime {
                     .and_then(|repair| self.verifier.repair_step(&plan.steps[index], repair))
                     .ok_or_else(|| AmosError::Validation("permitted repair is invalid".into()))?;
                 plan.steps[index] = repair;
-                self.store.save_plan(&plan)?;
-                atxn = self.advance(&atxn, AtxnState::Executing, None)?;
                 repairs += 1;
             }
         }
@@ -590,11 +585,6 @@ impl AmosRuntime {
             let _ = self.advance(&atxn, AtxnState::Rejected, Some(Outcome::Reject))?;
             return Err(AmosError::Validation(claim_verification.errors.join("; ")));
         }
-        for claim in &mut claims {
-            claim
-                .verification_ids
-                .push(claim_verification.verification_id.clone());
-        }
         verifications.push(claim_verification.clone());
         atxn = self.advance(&atxn, AtxnState::Revalidating, None)?;
         let validation = self
@@ -608,7 +598,6 @@ impl AmosRuntime {
             ));
         }
         if atxn.policy_epoch != identity.policy_epoch {
-            let _ = self.advance(&atxn, AtxnState::Aborted, Some(Outcome::Abort))?;
             return Err(AmosError::Conflict(
                 "policy epoch changed before commit".into(),
             ));
@@ -2091,7 +2080,7 @@ impl AmosRuntime {
             content_hash: content_hash(&report)?,
             audience: "internal".into(),
             risk_class: RiskClass::MaterialInternal,
-            object_state: "pending_promotion".into(),
+            object_state: "finalized".into(),
             publication_validity: PublicationValidity::Draft,
             created_at: atxn.created_at,
         };

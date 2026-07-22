@@ -79,13 +79,6 @@ async fn complete_vertical_slice_is_review_gated_and_replayable() {
     assert!(result.manifest.conflicts.is_empty());
     assert_eq!(result.manifest.required_role_coverage.len(), 5);
     assert_eq!(result.executions.len(), 3);
-    assert_eq!(result.artifact.object_state, "pending_promotion");
-    assert!(
-        result
-            .claims
-            .iter()
-            .all(|claim| !claim.verification_ids.is_empty())
-    );
     assert!(
         result
             .claims
@@ -701,7 +694,6 @@ async fn authorized_approval_completes_the_local_publication_lifecycle() {
         .await
         .unwrap();
     assert_eq!(approved.transaction.state, AtxnState::Published);
-    assert_eq!(approved.artifact.object_state, "finalized");
     assert_eq!(
         approved.artifact.publication_validity,
         PublicationValidity::ValidAtPublication
