@@ -1,5 +1,11 @@
 # AMOS Artifact Evaluation Guide
 
+AMOS is an internally deployed analyst system that connects to company data
+and tools, answers business questions, performs verified analysis, and produces
+graphs, reports, and presentation slides. This guide evaluates the current
+memory and control kernel. It does not establish that the complete analyst
+product, local Gemma 4 integration, or artifact compiler is finished.
+
 This guide regenerates the evidence bundle used by the AMOS paper. The harness is offline-capable, isolates generated data from the source checkout, records failures per stage, and writes SHA-256 hashes for generated artifacts.
 
 ## Full reproduction

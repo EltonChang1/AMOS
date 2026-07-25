@@ -27,7 +27,7 @@
 \definecolor{amosgray}{HTML}{F3F4F5}
 
 \hypersetup{
-  pdftitle={AMOS: A Memory Operating Layer for Autonomous Data Analysis},
+  pdftitle={AMOS: An Internally Deployed Analyst System},
   pdfauthor={Elton Chang},
   pdfsubject={End-to-end AMOS product architecture and implementation guide}
 }
@@ -85,15 +85,15 @@
 \begin{document}
 
 \begin{center}
-  {\fontsize{20}{23}\selectfont\bfseries\textcolor{amosblue}{AMOS: A Memory Operating Layer\\for Autonomous Data Analysis}}
+  {\fontsize{20}{23}\selectfont\bfseries\textcolor{amosblue}{AMOS: An Internally Deployed\\Analyst System}}
 \end{center}
 
 \begin{abstract}
 This document is the product architecture and build guide for \amos. It defines the theory, system boundaries, data model, runtime protocol, component interfaces, security model, deployment topology, operating model, and phased implementation plan needed to build \amos from an empty repository to a production service. The intended reader is a startup engineering team that must make the system work, operate it safely, and know when each layer is complete.
 
-\amos is a model-neutral operating layer between autonomous data-analysis applications and a company's data systems. It converts changing schemas, metrics, snapshots, documents, permissions, prior analyses, reviewer corrections, and execution records into governed analytical memory. For each task, it compiles a bounded working set, grants scoped tool capabilities, validates the versions used, verifies the computation, records claim-level support, and commits the artifact with a replay and invalidation contract. Models propose plans and interpretations; deterministic services retain authority over access, execution, validation, and publication.
+\amos is an internally deployed analyst system that connects to company data and tools, answers business questions, performs verified analysis, and produces graphs, reports, and presentation slides. The customer receives a complete product with a local analyst agent, beginning with Gemma 4 support, rather than supplying a separate agent. The agent proposes plans, queries, interpretations, and report structure; the \amos control layer retains authority over access, execution, verification, evidence, review, and publication.
 
-The architecture is deliberately incremental. A startup first ships a modular monolith that completes one read-only analytical workflow end to end. It then adds durable feedback, scheduling, multi-tenant governance, connector breadth, and controlled autonomy only after explicit correctness, security, reliability, and customer-value gates pass. The guide defines the complete subsystem map and the normative contracts that detailed designs must implement. Appendices A--F freeze the most dangerous first-release contracts. Appendices G--K describe the current Rust implementation: its complete type and function inventory, exact persistence and transport surfaces, test evidence, low-level cost model, and known production gaps. Database DDL, generated schemas, and adapter conformance fixtures remain versioned engineering artifacts rather than claims hidden in prose.
+The architecture is deliberately incremental. A startup first ships a modular monolith that completes one read-only analytical workflow from employee request through verified calculations, graphs, report, and editable slide deck. It then adds durable feedback, scheduling, multi-tenant governance, connector breadth, and controlled autonomy only after explicit correctness, security, reliability, and customer-value gates pass. The guide defines the complete subsystem map and the normative contracts that detailed designs must implement. Appendices A--F freeze the most dangerous first-release contracts. Appendices G--K describe the current Rust control-layer fixture and its known product gaps. Database DDL, generated schemas, and adapter conformance fixtures remain versioned engineering artifacts rather than claims hidden in prose.
 \end{abstract}
 
 \clearpage
@@ -104,14 +104,18 @@ The architecture is deliberately incremental. A startup first ships a modular mo
 
 \subsection{Product Definition}
 
-\amos is the control and memory plane for autonomous data analysis. It is not a warehouse, a dashboard, a general document search engine, or a particular language model. It is the layer that makes analytical work persistent, permissioned, temporally valid, inspectable, and repeatable across models and applications.
+\amos is an internally deployed analyst system that connects to company data and tools, answers business questions, performs verified analysis, and produces graphs, reports, and presentation slides. It is not a warehouse, a general document search engine, or only a language model. It includes the analyst agent and the control, execution, verification, evidence, and artifact services needed to deliver completed analytical work.
+
+The long-term product goal is to replace the end-to-end work performed by data analysts and business analysts for supported workflows. This outcome is established workflow by workflow through correctness, coverage, review burden, reliability, cost, and customer evidence; it is not inferred from a fluent model response or a completed control-layer fixture.
 
 The product has three surfaces over one substrate:
 \begin{enumerate}
   \item \textbf{Analytical memory:} a typed and versioned representation of the company's metrics, schemas, data states, documents, policies, decisions, prior work, and feedback.
-  \item \textbf{Agent runtime:} a governed execution environment for planning, read-only SQL, deterministic statistics and chart tools, verification, artifact construction, review, scheduling, and recovery. General Python is a later capability behind the same worker interface.
-  \item \textbf{Application platform:} APIs and templates for recurring business reviews, investigations, monitors, forecasts, planning workflows, and domain-specific analytical agents.
+  \item \textbf{Analyst and control runtime:} a customer-local model proposes plans and interpretations; a governed execution environment controls read-only SQL, deterministic statistics and chart tools, verification, review, scheduling, and recovery.
+  \item \textbf{Artifact product:} deterministic compilers produce graphs, reports, editable presentation slides, dashboards, and spreadsheets with claim-level evidence.
 \end{enumerate}
+
+The required end-to-end flow is: employee or scheduled request $\rightarrow$ local analyst agent (initially Gemma 4) $\rightarrow$ \amos control layer $\rightarrow$ company data and tool connectors plus bounded SQL/statistics/chart workers $\rightarrow$ verification and evidence $\rightarrow$ report and slide plan $\rightarrow$ deterministic artifact compiler $\rightarrow$ charts, PPTX, PDF, dashboard, and spreadsheet.
 
 \subsection{Who Uses This Guide}
 
@@ -156,11 +160,11 @@ These sources do not share one transaction manager. A metric can change after re
   \item a stable runtime contract above replaceable models, indexes, warehouses, and application surfaces.
 \end{itemize}
 
-Source systems continue to own raw data, primary access control, warehouse transactions, catalog records, semantic definitions, document originals, and identity truth. Applications own user experience and domain workflow. Models own no durable authority: model output is a proposal until a deterministic gate accepts it.
+Source systems continue to own raw data, primary access control, warehouse transactions, catalog records, semantic definitions, document originals, and identity truth. \amos product surfaces own the default employee workflow and artifact experience; approved customer applications may also call the same runtime contract. Models own no durable authority: model output is a proposal until a deterministic gate accepts it.
 
 \subsection{First Product Scope}
 
-\must The first production slice supports one tenant, one warehouse, one approved metric family, read-only SQL, deterministic built-in statistics, structured chart generation, governed documents, typed report claims, reviewer approval, and replay. \deferred General Python, free-form claim extraction, arbitrary production writes, unrestricted notebook code, general multi-agent scheduling, unreviewed causal claims, and autonomous external communication. Expansion occurs only through the gates in Section~\ref{sec:build-plan}.
+\must The first production slice supports one tenant, one warehouse, one approved metric family, a customer-local analyst model, read-only SQL, deterministic built-in statistics, structured chart generation, a verified report, an editable presentation deck, typed claims, reviewer approval, and replay. The model provider is replaceable; Gemma 4 is the first supported local family. \deferred General Python, free-form authoritative claim extraction, arbitrary production writes, unrestricted notebook code, general multi-agent scheduling, unreviewed causal claims, and autonomous external communication. Expansion occurs only through the gates in Section~\ref{sec:build-plan}.
 
 \section{Theory: Analytical Memory as an Operating Layer}
 
@@ -355,7 +359,7 @@ Operations Console & Support, security, and platform operator & Search transacti
 \caption{The product exposes governed state and explicit controls instead of presenting an opaque chat transcript.}
 \end{table}
 
-The current Rust MVP implements authenticated, server-rendered versions of all four surfaces. The Analysis Workspace submits the fixed payment-health task and displays the artifact and evidence ledger; Memory Studio lists only policy-visible memory; Review Queue requires reviewer authority and links to artifact evidence; Operations Console requires administrator authority and lists audit events. The administrator API exposes jobs, metrics, retention, erasure, connector health, and source-event processing. Connector configuration, metric editing, publication destinations, and interactive retry/recovery controls in Table~3 remain deployment-product interfaces rather than claims made for these four local pages.
+The current Rust MVP implements authenticated, server-rendered versions of all four surfaces. The Analysis Workspace still submits a fixed legacy payment-health fixture and displays the artifact and evidence ledger; this fixture is implementation evidence, not the product scope. Memory Studio lists only policy-visible memory; Review Queue requires reviewer authority and links to artifact evidence; Operations Console requires administrator authority and lists audit events. The administrator API exposes jobs, metrics, retention, erasure, connector health, and source-event processing. Connector configuration, metric editing, publication destinations, model integration, report and slide planning, and interactive retry/recovery controls remain incomplete product interfaces rather than claims made for these four local pages.
 
 \subsection{Customer Journey}
 
@@ -745,9 +749,9 @@ The public library re-exports \code{AmosRuntime}, \code{RuntimeConfig}, \code{Am
 
 \subsection{First Vertical Slice}
 
-Use a payment-health or subscription-health review as the first commercial workflow. It is recurring, economically meaningful, bounded, and reviewable. Limit the alpha to one metric family, one warehouse, three query shapes, one chart, one report template, and one reviewer role. Shadow the existing analyst process before replacing any deliverable.
+Use a recurring executive business review selected from a design partner's actual analyst queue as the first commercial workflow. It must be economically meaningful, bounded, repeatable, and reviewable without defining AMOS around one department or dataset. Limit the alpha to one metric family, one warehouse, three query shapes, a small approved chart set, one report template, one presentation template, and one reviewer role. Shadow the existing analyst process before replacing any deliverable.
 
-The vertical slice is complete when a user request or schedule produces: admitted transaction; versioned context manifest; verified SQL executions; result and chart hashes; structured claims; review-aware report; claim dependencies; replay package; audit trail; and explicit terminal outcome. A fluent report without these records is not an AMOS product slice.
+The vertical slice is complete when a user request or schedule produces: an admitted transaction; local model plan; versioned context manifest; verified SQL executions; result and chart hashes; structured claims; review-aware report; editable presentation deck; claim dependencies; replay package; audit trail; and explicit terminal outcome. A fluent answer without these records and completed artifacts is not an AMOS product slice.
 
 \subsection{Team and Ownership}
 
@@ -757,7 +761,7 @@ A five-person initial team is sufficient: founding architect/product lead; memor
 
 As completed on 2026-07-19, the repository is a Rust 2024 crate at version 0.2.0. The original audited inventory of 236 production declarations remains present or is intentionally superseded by cleaner typed recovery, migration, publication, retention, dispatch, observability, and bounded-execution APIs. The control schema is at checksummed version 6 and the executable suite contains 61 tests plus a reproducible capacity benchmark. Formatting, Clippy with warnings denied, debug and release tests, optimized build, and Rustdoc are release gates. Appendix~I records exact local evidence without treating external infrastructure as implemented.
 
-The implementation completes the local payment-health vertical slice: indexed permission-first memory, exact role compilation, durable source observation events, deterministic planning, a frozen SQL subset, constant-time verified capabilities, cancellable bounded execution, independently verified claims and charts, atomic evidence, review, transitive invalidation, fenced workers and dispatch, state-driven recovery, persisted level-3 replay comparisons, hash-checked object promotion, metrics, and privacy erasure. It is intentionally not equivalent to managed PostgreSQL/RLS, enterprise identity/KMS, customer connectors, isolated worker infrastructure, or cloud publication topology.
+The implementation completes a legacy local payment-health control-layer fixture: indexed permission-first memory, exact role compilation, durable source observation events, deterministic planning, a frozen SQL subset, constant-time verified capabilities, cancellable bounded execution, independently verified claims and charts, atomic evidence, review, transitive invalidation, fenced workers and dispatch, state-driven recovery, persisted level-3 replay comparisons, hash-checked object promotion, metrics, and privacy erasure. It is not the complete analyst product and does not yet include a local model, domain-neutral workflow, editable slides, production connectors, managed PostgreSQL/RLS, enterprise identity/KMS, isolated worker infrastructure, or cloud publication topology.
 
 \begin{table}[ht]
 \centering
@@ -769,7 +773,7 @@ The implementation completes the local payment-health vertical slice: indexed pe
 State store & SQLite WAL; typed/indexed rows; atomic evidence, review, validity, retention, erasure, publication, outbox, and job effects; checksummed schema ledger. & PostgreSQL forced RLS, HA/PITR, online DDL, regional backup and restore. \\
 Transactions & Normative \atxn guard, CAS, immutable admission, version vectors, fences, deterministic checkpoint identities, and state-driven recovery tested across fourteen boundaries. & Distributed controller election and remote worker placement. \\
 Connectors & Typed port and SQLite adapter with stable versions, capability-bound reads, validation, durable deduplicated cursor events, restart recovery, and health. & Customer warehouse/IAM/catalog/document credentials, quotas, retry certification, and C1/C2 fixtures. \\
-Runtime & Deterministic payment workflow, bounded repair, statistics/chart, claims, review/revalidation, durable replay evidence, object promotion, and a bounded blocking lane. & General model router, additional task packs, and isolated worker services where measured. \\
+Runtime & Deterministic legacy reference workflow, bounded repair, statistics/chart, claims, review/revalidation, durable replay evidence, object promotion, and a bounded blocking lane. & Local Gemma 4 provider, domain-neutral task configuration, report/slide planning, artifact compilation, and isolated worker services where measured. \\
 Verification & Frozen AST subset; schema/metric/time/function rules; cancellation; incremental limits; referential, numeric, statistical, and chart-hash recomputation. & Calibrated task-specific rule packs and driver conformance beyond SQLite. \\
 Provenance & Typed claims/edges, six validity dimensions, transitive quota traversal, consumed continuation cursors, replay comparisons, retention and erasure receipts. & Signed customer export formats and long-term data-platform version leases. \\
 API/UI & Authenticated \code{/v1}, explicit mutation keys, stable errors, request/correlation IDs, 1 MiB cap, opaque artifact cursors, OpenAPI 3.1 endpoint, CSP and security headers. & Enterprise SSO/session adapter, SDK distribution, tenant quota configuration, and streaming progress. \\

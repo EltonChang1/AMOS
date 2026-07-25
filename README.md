@@ -1,14 +1,51 @@
-# AMOS: A Memory Operating Layer for Autonomous Data Analysis
+# AMOS: An Internally Deployed Analyst System
 
-AMOS is a Rust-native operating layer between analytical agents and governed data systems. It gives an agent a bounded, permission-safe view of persistent organizational memory; verifies proposed computation against current schemas, metrics, policies, and data state; executes through signed, capability-limited workers; and commits every material claim with provenance, review state, invalidation rules, and replay metadata.
+> AMOS is an internally deployed analyst system that connects to company data
+> and tools, answers business questions, performs verified analysis, and
+> produces graphs, reports, and presentation slides.
 
-This repository implements the complete local production slice defined by the accompanying papers: one configured tenant, one read-only warehouse connector, the payment-failure metric family, deterministic statistics and charting, governed documents, typed report claims, reviewer approval or correction, transitive dependency invalidation, durable replay evidence, crash recovery, and local object publication.
+AMOS includes a local analyst agent, a control layer, data and tool connectors,
+deterministic analytical workers, verification, evidence, review, and artifact
+generation. The model proposes analytical work and explanations. AMOS decides
+what is permitted, runs authoritative calculations outside the model, checks
+the resulting claims, and produces decision-ready artifacts.
+
+The long-term product goal is to automate the end-to-end work now performed by
+data analysts and business analysts. The first releases prove that goal one
+recurring workflow at a time and retain review where the evidence or impact
+requires human judgment.
+
+## Product flow
+
+```mermaid
+flowchart LR
+    U["Employee or scheduled request"] --> G["Local analyst agent<br/>Gemma 4"]
+    G --> A["AMOS control layer"]
+    A --> C["Company data and tool connectors"]
+    A --> W["SQL, statistics and chart workers"]
+    C --> W
+    W --> V["Verification and evidence"]
+    V --> G
+    G --> R["Report and slide plan"]
+    R --> P["Deterministic artifact compiler"]
+    P --> O["Charts, PPTX, PDF, dashboard and spreadsheet"]
+```
+
+The complete target product is defined in
+[the product requirements](docs/PRODUCT_REQUIREMENTS.md). The current Rust
+implementation proves the control-layer foundation with one configured tenant,
+one read-only SQLite connector, deterministic statistics and charting,
+governed documents, typed report claims, review, invalidation, replay, and
+local publication. Its payment-specific workflow is a temporary reference
+fixture, not the AMOS product definition.
 
 - [Research paper](papers/AMOS_research_paper.pdf): the memory-operating abstraction, core primitives, reference scenario, and evaluation.
 - [Design proposal](papers/AMOS_design_proposal.pdf): the product architecture and normative Specifications A–F.
+- [Product requirements](docs/PRODUCT_REQUIREMENTS.md): the canonical product
+  outcome, Gemma 4 integration, artifact outputs, and release requirements.
 - [Rust requirements matrix](docs/RUST_REQUIREMENTS_MATRIX.md): direct traceability from both papers to implementation modules.
 
-## What the MVP provides
+## What the current control-layer implementation provides
 
 - **Governed memory:** typed, versioned objects with authority, effective time, permissions, supersession, provenance, and immutable source-version identity.
 - **Permission-first context:** indexed tenant/type/status/time/label filtering happens before bounded top-K ranking; consistency minima, exact lexical token accounting, role coverage, ambiguity, omissions, and a ranking trace are frozen in the context manifest.
@@ -67,7 +104,7 @@ embedding deployment. Missing, malformed, and unknown credentials return
 `401 UNAUTHENTICATED`; authenticated identities that lack authority return
 `403 PERMISSION_DENIED`.
 
-Run the reference analysis from the CLI:
+Run the current legacy reference fixture from the CLI:
 
 ```bash
 cargo run -- --demo run \
@@ -75,7 +112,11 @@ cargo run -- --demo run \
   --request "Why did payment failure rate increase over the last six hours, and should we update the executive dashboard?"
 ```
 
-The run returns a context manifest, typed plan, verified executions, report, claims, dependencies, replay package, and an explicit `needs_review` outcome. Replay the resulting artifact with:
+This fixture is retained only to exercise the implemented runtime until a
+domain-neutral company-analysis fixture replaces it. The run returns a context
+manifest, typed plan, verified executions, report, claims, dependencies, replay
+package, and an explicit `needs_review` outcome. Replay the resulting artifact
+with:
 
 ```bash
 cargo run -- --demo replay ARTIFACT_ID --idempotency-key replay-001
@@ -139,9 +180,15 @@ count.
 - `src/api.rs`, `src/main.rs` — Axum HTTP/UI surfaces and the command-line application.
 - `tests/` — Rust unit, API, security, and end-to-end contracts.
 
-## MVP boundary
+## Current implementation boundary
 
-The design proposal explicitly defers general Python execution, arbitrary production writes, unrestricted notebook code, general multi-agent scheduling, unreviewed causal claims, and autonomous external communication; they are intentionally absent.
+The target product includes a customer-local analyst agent and deterministic
+generation of graphs, reports, slides, dashboards, and spreadsheets. Those
+features are required by `docs/PRODUCT_REQUIREMENTS.md` but are not yet present
+in the current Rust slice. General Python execution, arbitrary production
+writes, unrestricted notebook code, general multi-agent scheduling, unreviewed
+causal claims, and autonomous external communication remain outside the first
+release.
 
 The local implementation supplies complete contracts and executable adapters for SQLite, filesystem object promotion, static demo identity, and local dispatch. The following release integrations genuinely require deployment infrastructure or credentials and are not represented as completed here: PostgreSQL forced RLS and backup/restore, enterprise OIDC/SAML validation, KMS/HSM-backed signing-key rotation, S3/GCS regional lifecycle controls, customer warehouse credentials, container/VM worker sandboxing and egress policy, and external publication destinations. Their conformance targets are the same tenant, capability, fence, hash, idempotency, acknowledgment, and audit contracts tested by the local adapters.
 

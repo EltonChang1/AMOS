@@ -1,5 +1,11 @@
 # AMOS frozen evaluation results
 
+> Product-scope note: AMOS is an internally deployed analyst system that
+> connects to company data and tools, answers business questions, performs
+> verified analysis, and produces graphs, reports, and presentation slides.
+> The frozen results below evaluate the current memory and control kernel, not a
+> completed Gemma 4 analyst integration or general artifact-generation product.
+
 These are the fixed-workload results reported in the paper. Machine-readable outputs in this directory preserve the benchmark, extended probes, governed retrieval comparisons, and indexed scale studies.
 
 ## 1. Analytical-state invariant benchmark

@@ -1,5 +1,11 @@
 # AMOS External Study Handoff
 
+AMOS is an internally deployed analyst system that connects to company data
+and tools, answers business questions, performs verified analysis, and produces
+graphs, reports, and presentation slides. The external study must test that
+complete workflow, including the local analyst model, calculations, graphs,
+report, presentation, and evidence.
+
 This packet is for collaborators who did not implement AMOS. It is deliberately separate from the current synthetic fixtures. Do not place real participant identities, secrets, proprietary product exports, or unredacted sensitive data in the public repository.
 
 ## Before Anyone Authors or Labels Data

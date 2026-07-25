@@ -1,6 +1,38 @@
 # AMOS Company, Product, Investor, and YC FAQ
 
+Last product-direction update: 2026-07-25
 
+## Canonical product definition
+
+> AMOS is an internally deployed analyst system that connects to company data
+> and tools, answers business questions, performs verified analysis, and
+> produces graphs, reports, and presentation slides.
+
+The customer buys AMOS as a complete analyst system. The customer does not need
+to provide a separate AI agent. AMOS includes a local analyst agent, beginning
+with support for Gemma 4, while keeping the model behind AMOS permissions,
+verification, execution, evidence, and review.
+
+```mermaid
+flowchart LR
+    U["Employee or scheduled request"] --> G["Local analyst agent<br/>Gemma 4"]
+    G --> A["AMOS control layer"]
+    A --> C["Company data and tool connectors"]
+    A --> W["SQL, statistics and chart workers"]
+    C --> W
+    W --> V["Verification and evidence"]
+    V --> G
+    G --> R["Report and slide plan"]
+    R --> P["Deterministic artifact compiler"]
+    P --> O["Charts, PPTX, PDF, dashboard and spreadsheet"]
+```
+
+The model understands the request, proposes the plan, drafts tool calls,
+interprets verified results, and plans the report and slides. AMOS controls
+access, executes authoritative calculations, checks every material claim, and
+renders the final artifacts. Payment analysis is not the product. The current
+payment-specific code is a temporary implementation fixture that must be
+replaced by domain-neutral configuration.
 
 Every business answer falls into one of three categories:
 
@@ -22,26 +54,28 @@ follow-up questions.
 
 ### What does AMOS do?
 
-**Answer:** AMOS lets an AI analyze company data without giving the model
-unrestricted access. It checks what the AI proposes, runs approved operations,
-and records the evidence behind each important conclusion.
+**Answer:** AMOS connects to a company's data and tools, uses a locally deployed
+analyst agent to answer business questions, verifies the analysis, and produces
+graphs, reports, and presentation slides.
 
 In one line:
 
-> The AI proposes the analysis; AMOS decides what is allowed, runs it, and
-> records how each conclusion was produced.
+> AMOS performs the analyst workflow while keeping data access, calculations,
+> claims, and outputs controlled and reproducible.
 
 ### What is the current product?
 
-**Verified now:** The repository contains a local Rust application that runs one
-governed payment-health analysis against a read-only SQLite warehouse. It
-includes permission-aware context, SQL and metric checks, bounded execution,
-claim-level evidence, human review, invalidation, replay, an HTTP API, a CLI,
-and four server-rendered product pages.
+**Verified now:** The repository contains the control-layer foundation as a
+local Rust application. It includes permission-aware context, SQL and metric
+checks, bounded execution, deterministic statistics and charting, claim-level
+evidence, human review, invalidation, replay, an HTTP API, a CLI, and four
+server-rendered product pages.
 
-It is not yet a hosted enterprise service. It has no production customer
-connector, enterprise login, managed cloud storage, hardened remote worker,
-external publication destination, or general-purpose AI agent.
+The executable fixture is still payment-specific. It does not yet include the
+Gemma 4 analyst agent, a general report and slide planner, PPTX/PDF/spreadsheet
+generation, production customer connectors, enterprise login, hardened remote
+workers, or a supported customer deployment package. Those are required
+product work, not completed features.
 
 ### What problem does AMOS solve?
 
@@ -50,16 +84,18 @@ metric definition, a stale schema, incomplete data, information the user may
 not see, or an unsupported causal explanation. When any of those inputs later
 change, a previously published conclusion can also become unreliable.
 
-AMOS puts explicit checks and records between the AI and the data system. The
-goal is not to make a model infallible. The goal is to make important analysis
-controlled, inspectable, reviewable, and change-aware.
+AMOS combines an analyst agent with explicit checks and records between the
+model and company systems. The goal is to complete the analytical deliverable,
+not merely flag risk. The output must still be controlled, inspectable,
+reviewable, and change-aware.
 
 ### Who is the first customer?
 
-**Working hypothesis:** A company with at least 500 employees that is already
-testing AI-generated analysis on sensitive warehouse data. The first useful
-workflow is a recurring payment, subscription, risk, finance, or data-quality
-report that a human reviews before executives or customers see it.
+**Working hypothesis:** A company with at least 500 employees that has a data
+warehouse, recurring analyst queues, and business teams waiting for reports or
+presentations. The first useful workflow is a recurring business review whose
+inputs and expected output can be compared with the company's existing analyst
+process.
 
 The likely buyer is a VP of Data, Head of Analytics, Head of AI Platform, or
 Chief Data Officer. A staff data engineer, analytics engineer, or AI-platform
@@ -107,42 +143,49 @@ That customer evidence matters more now than adding another broad feature.
 ### Is AMOS an operating system?
 
 Not like Linux, Windows, or macOS. "Operating layer" describes its role between
-an AI agent and the data and tools the agent wants to use. For a customer-facing
-description, "governed analysis runtime" or "software that controls and records
-AI data analysis" is clearer.
+the included analyst agent and company data and tools. The customer-facing
+description is "internally deployed analyst system," because customers buy the
+completed analytical outcome rather than a runtime component.
 
 ### Is AMOS an AI model or chatbot?
 
-No. AMOS does not train a model, and the current repository does not contain a
-general-purpose AI agent. An external application or agent can propose work
-through AMOS.
+AMOS is a complete analyst product that includes a model, but it is not only a
+model or chatbot. Gemma 4 is the first planned local model family. The durable
+product value is the full system: connectors, permitted context, analytical
+planning, bounded tools, verification, evidence, review, and artifact
+generation. Customers may substitute another approved model without replacing
+the rest of AMOS.
 
 ### What does a user actually do?
 
-In the local product:
+In the target product:
 
-1. An analyst submits a payment-health question.
-2. AMOS selects the permitted metric, schema, policy, data state, and supporting
-   documents.
-3. It creates a typed plan.
-4. It verifies and runs read-only SQL, deterministic statistics, and charting.
-5. It stores four typed claims and their evidence relationships.
-6. A reviewer approves, rejects, or corrects the result.
-7. AMOS can replay the work or mark dependent claims when a source changes.
+1. An employee asks a business question or schedules a recurring analysis.
+2. The local analyst agent identifies the necessary metrics, sources, and
+   analytical steps.
+3. AMOS supplies only permitted context and verifies the typed plan.
+4. Capability-limited workers run approved SQL, statistics, and charting.
+5. The agent interprets the verified results and proposes a report and slide
+   plan.
+6. AMOS verifies each material claim and deterministically renders graphs,
+   PPTX, PDF, dashboard, and spreadsheet outputs.
+7. A reviewer resolves any high-impact, causal, regulated, or unsupported item.
+8. AMOS publishes the approved package and later revalidates it when sources
+   change.
 
-The current page is a fixed demonstration workflow, not an open-ended chat
-product.
+The current page implements only a fixed reference fixture. It must become this
+domain-neutral user experience.
 
 ### What is the first commercial use case?
 
-**Working hypothesis:** A reviewed operational-health report such as payment
-failure, subscription churn, or warehouse quality.
+**Working hypothesis:** A recurring executive business review that currently
+requires an analyst to collect data, calculate changes, explain supported
+drivers, create graphs, and prepare slides.
 
-The repository's actual product slice is payment health. It is a good wedge
-because the workflow is recurring, economically meaningful, based on approved
-metrics, and easy to compare with an existing analyst process. Subscription
-churn and warehouse quality exist as evaluation scenarios, not as equally
-complete production workflows.
+The exact department should follow the first design partner's demand. A useful
+first workflow has approved metrics, read-only sources, a repeatable output,
+visible analyst time, and a reviewer who can judge correctness. The product
+must not be branded around the department or dataset chosen for that pilot.
 
 ### What is the user's current alternative?
 
@@ -178,9 +221,10 @@ and evidence.
 
 ### Does AMOS replace BI?
 
-No. BI tools remain useful for dashboards and recurring reports. AMOS can
-govern how an AI creates or updates an analytical result before an approved
-artifact is sent to BI.
+Not necessarily. AMOS produces its own graphs, reports, slides, dashboards, and
+spreadsheets, while existing BI tools may remain publication destinations or
+sources of approved metric definitions. A customer may use AMOS without
+building the final deliverable manually in BI.
 
 ### Does AMOS replace a catalog, semantic layer, or lineage tool?
 
@@ -191,9 +235,23 @@ exact state and computation used.
 
 ### Does AMOS perform the analysis?
 
-AMOS coordinates and governs analysis. Tool workers perform SQL, statistics,
-and chart computation. The current workers are built into the local Rust
-application but use separate typed contracts and signed capabilities.
+Yes. The included analyst agent plans and interprets the work. Tool workers
+perform authoritative SQL, statistics, and chart computation. AMOS verifies
+the plan, results, and written claims, then generates the final deliverables.
+The model does not become the source of truth for calculations.
+
+### Is the goal to replace data analysts and business analysts?
+
+Yes, for supported workflows. The long-term product goal is to complete the
+end-to-end work: understand the business question, obtain the permitted data,
+perform the analysis, explain the result, produce the graphs and presentation,
+answer follow-up questions, and keep recurring work current.
+
+That is not a current product claim. The present repository proves only part of
+the control and execution layer. AMOS should claim replacement only after
+customer evidence shows that a workflow is completed at the required accuracy,
+coverage, review burden, reliability, and cost. Early releases retain review
+for high-impact, causal, regulated, or insufficiently supported conclusions.
 
 ### Who chooses the tool?
 
@@ -203,9 +261,9 @@ are allowed before a worker runs it.
 
 ### Can one analysis use several tools?
 
-Yes. The current payment workflow uses read-only SQL, deterministic rate
-comparison, and charting. Each step has its own authorization, inputs, output
-hash, resource counts, and dependency records.
+Yes. A task may use read-only SQL, deterministic statistics, charting, document
+retrieval, and approved business-tool connectors. Each step has its own
+authorization, inputs, output hash, resource counts, and dependency records.
 
 ### Does AMOS support general exploratory analysis?
 
@@ -243,10 +301,23 @@ external destination.
 
 ### Can customers choose the model?
 
-That is the intended architecture, but it is not yet proven through production
-model integrations. AMOS's core contracts do not depend on a model SDK. A
-customer could pair it with a hosted model, private endpoint, or self-hosted
-model if the surrounding application supplies the integration.
+Yes in the product design. AMOS will ship with local Gemma 4 support and a
+provider-neutral model contract. A customer can select the supported Gemma
+profile, another approved self-hosted model, a private endpoint, or an allowed
+hosted provider without changing AMOS's permissions, workers, evidence, or
+artifact contracts. This model integration is not yet implemented.
+
+### Why Gemma 4?
+
+Gemma 4 is suitable for the first local model integration because it supports
+instruction following, structured tool use, system prompts, long context,
+quantized local deployment, and commercial distribution under Apache 2.0. The
+planned standard profile is Gemma 4 26B A4B Q4; 12B Q4 is the lower-resource
+profile and E4B Q4 is for development or constrained tasks.
+
+Gemma 4 is not trusted to enforce permissions or calculate authoritative
+figures. It operates inside the AMOS contract and can be replaced if another
+model performs better on the customer's evaluated tasks.
 
 ### Does a self-hosted model remove the need for AMOS?
 
@@ -318,12 +389,13 @@ conclusions still require qualified review.
 ### How far along is the product?
 
 **Verified now:** The public repository was created on 2026-07-12. By
-2026-07-22 it contained version `0.2.0`, a complete local payment-health
-workflow, API, CLI, four product pages, papers, evaluation artifacts, and a
-release-gated Rust test suite.
+2026-07-22 it contained version `0.2.0`, a complete local control-layer
+reference workflow, API, CLI, four product pages, papers, evaluation artifacts,
+and a release-gated Rust test suite.
 
 The current code proves a local contract. It does not prove that a customer can
-deploy AMOS safely in a real enterprise environment.
+deploy AMOS safely in a real enterprise environment or that the complete
+Gemma-powered analyst product can perform general analyst work.
 
 ### What is working today?
 
@@ -332,7 +404,7 @@ The local product includes:
 - one configured tenant;
 - static local demo identities;
 - one read-only SQLite warehouse connector;
-- one implemented payment-failure metric family;
+- one legacy payment-specific metric fixture;
 - typed, versioned, permission-aware memory;
 - bounded context with exact token accounting;
 - parsed read-only SQL checks;
@@ -357,7 +429,10 @@ The repository does not include:
 - managed queues, object storage, observability, alerting, or on-call;
 - regional deployment and data-residency controls;
 - external publication adapters;
-- a general agent, model router, SDK, or connector kit;
+- the Gemma 4 analyst agent or provider-neutral model router;
+- general report planning and deterministic PPTX, PDF, dashboard, and
+  spreadsheet generation;
+- configurable domain packs and a production connector kit;
 - a production SLA, support process, penetration test, SOC 2 report, or ISO
   certification.
 
@@ -491,7 +566,7 @@ and three paid pilots.
 ### What is the initial serviceable market?
 
 **Working hypothesis:** Large U.S. information, finance, professional-services,
-payments, subscription, and health organizations that already have:
+software, retail, logistics, and health organizations that already have:
 
 - a cloud warehouse or governed analytics stack;
 - an internal data or AI platform team;
@@ -733,22 +808,22 @@ general claim that AMOS is unique.
 
 Expand in this order:
 
-1. more metric families in the same workflow;
-2. more recurring reports for the same team;
-3. another source in the same environment;
-4. another team or business unit;
-5. additional model or agent applications using the same runtime;
-6. controlled higher-risk actions only after separate safety evidence.
+1. complete one recurring report and slide deck for one team;
+2. add more questions and metric families using the same connected sources;
+3. automate more recurring reports for that team;
+4. add another approved source in the same environment;
+5. expand to another team or business unit;
+6. add controlled higher-risk actions only after separate safety evidence.
 
 This sequence reuses governance and integration work. Jumping immediately to
 arbitrary agents or database writes would expand risk faster than value.
 
-### What product should come after payment health?
+### What product should come after the first workflow?
 
-First choose based on customer demand. The repository contains evaluation
-fixtures for subscription churn and warehouse quality, which make them cheaper
-technical candidates. Neither should be called a product until a customer
-workflow, UI, connector, and verification pack are complete.
+Choose based on measured customer demand. The next workflow should reuse the
+same identity, connectors, metric definitions, review rules, and artifact
+templates. A scenario is not a product until its user workflow, connectors,
+verification, graphs, report, slide deck, and operating support are complete.
 
 ### How should AMOS expand to other warehouses?
 
@@ -1037,7 +1112,7 @@ guarantee every sentence from a general model is true.
 
 ### Can AMOS enforce human approval?
 
-Yes in the local payment workflow. Review is append-only and can approve,
+Yes in the local reference workflow. Review is append-only and can approve,
 reject, or correct. Publication occurs only after the required review. Each new
 production workflow still needs its own review policy.
 
@@ -1058,9 +1133,15 @@ export, backup deletion, or subprocessor confirmation.
 
 ### Is customer data used to train a model?
 
-AMOS itself does not train a model. The answer for any deployment depends on
-the chosen model provider and contract. The product needs a documented
-subprocessor list and model-provider data-use policy before production sales.
+Not by default. The standard deployment runs Gemma 4 inside the customer's
+environment and must not send prompts, results, or telemetry outside that
+environment. AMOS records inference evidence but does not use customer data to
+train or fine-tune a shared model.
+
+Any optional hosted provider or customer-specific fine-tuning requires an
+explicit administrator choice, data-use contract, retention policy,
+subprocessor disclosure, and separate training-data permission. That path is
+not implemented today.
 
 ### What subprocessors are used?
 
@@ -1404,18 +1485,20 @@ Never expose the static demo bearer identities on a public deployment.
 
 ### Describe what your company does in one sentence.
 
-**Draft answer:** AMOS lets AI agents analyze company data through approved
-queries and records the evidence behind every important conclusion.
+**Draft answer:** AMOS is an internally deployed analyst system that connects
+to company data and tools, answers business questions, performs verified
+analysis, and produces graphs, reports, and presentation slides.
 
-**Answering tip:** Stop after one sentence. Do not begin with "operating layer,"
-"revolutionary," "end-to-end," or "trustworthy AI."
+**Answering tip:** Stop after one sentence. Do not replace the concrete outputs
+with "operating layer," "revolutionary," "end-to-end," or "trustworthy AI."
 
 ### What will your company make?
 
-**Draft answer:** We are building software that sits between an AI data agent
-and a company's warehouse. It checks the user's permissions and the agent's
-query against current schemas and metric definitions, runs approved analysis,
-and gives reviewers the data and computation behind each conclusion.
+**Draft answer:** We are building software a company runs internally to do
+analyst work. An employee asks a business question; AMOS uses a local model to
+plan the analysis, connects to approved company systems, verifies and runs the
+calculations, and returns graphs, a report, and an editable presentation with
+evidence for each important conclusion.
 
 **Answering tip:** Describe the product and user path. Do not list every
 internal subsystem.
@@ -1468,12 +1551,13 @@ milestones, not lines of code alone.
 
 ### How far along are you?
 
-**Draft answer:** We have a working local Rust product for one payment-health
-workflow. It selects permission-safe context, verifies and runs read-only SQL,
-statistics, and charting, stores claim-level evidence, requires human review,
-and supports source-change invalidation and replay. It has an API, CLI, four
-web pages, and a release-gated test suite. We do not yet have a production
-customer connector or hosted deployment.
+**Draft answer:** We have built the local Rust control layer: it selects
+permission-safe context, verifies and runs read-only SQL, statistics, and
+charting, stores claim-level evidence, supports human review, and handles
+source-change invalidation and replay. It has an API, CLI, four web pages, and a
+release-gated test suite. The current fixture is payment-specific. We have not
+yet integrated Gemma 4, generalized the workflow, generated complete slide
+decks, or connected a production customer system.
 
 **Answering tip:** Lead with what can be demonstrated. End with the most
 important limitation.
@@ -1809,8 +1893,8 @@ one. Keep it short.
 Use bullet points, not a script:
 
 1. Each founder's name and role.
-2. "AMOS lets AI agents analyze company data through approved queries and
-   records the evidence behind every important conclusion."
+2. "AMOS is an internally deployed analyst system that answers business
+   questions and produces verified graphs, reports, and presentations."
 3. The firsthand event that exposed the problem.
 4. What is built now.
 5. The one next customer milestone.
@@ -1822,12 +1906,14 @@ demo. The product demo belongs in the separate demo field.
 
 In under two minutes:
 
-1. submit the payment-health question;
-2. show the selected governed context and blocked sensitive fields;
-3. show verified SQL, statistics, and chart execution;
-4. open one claim and its exact supporting evidence;
-5. approve or correct it;
-6. replay it or trigger a source change and show the affected validity.
+1. ask a domain-neutral business question;
+2. show the local analyst agent's proposed plan;
+3. show the selected governed context and blocked sensitive fields;
+4. show verified SQL, statistics, and chart execution;
+5. open the generated report and editable slide deck;
+6. open one claim and its exact supporting evidence;
+7. approve or correct it; and
+8. replay it or trigger a source change and show the affected validity.
 
 Do not spend the demo on architecture slides.
 
@@ -1838,13 +1924,13 @@ answer under 20 seconds, then let the interviewer choose the follow-up.
 
 ### What are you working on?
 
-AMOS controls how AI agents analyze company data and records the evidence behind
-each important conclusion.
+AMOS is an internally deployed analyst system that answers business questions
+and produces verified graphs, reports, and presentations from company data.
 
 ### Show us what you built.
 
-Run the local payment-health workflow and open a claim's evidence, review, and
-replay record.
+Run a business question from request through verified calculations, graphs,
+report, slide deck, claim evidence, review, and replay.
 
 ### Who needs it most?
 
@@ -2005,8 +2091,9 @@ questions.
 
 ### What is the mission?
 
-Make important AI-generated analysis controlled and inspectable without
-requiring a company to replace its warehouse, metrics, catalog, or BI tools.
+Give companies an internally deployed analyst system that answers business
+questions and produces verified graphs, reports, and presentations without
+requiring them to replace their existing data systems.
 
 ### What stage is the company?
 
@@ -2054,6 +2141,7 @@ evaluate it as a very early company, not a mature infrastructure vendor.
 ### Repository evidence
 
 - `README.md`
+- `docs/PRODUCT_REQUIREMENTS.md`
 - `docs/PRODUCT_READINESS.md`
 - `docs/RUST_REQUIREMENTS_MATRIX.md`
 - `artifacts/evaluation/RESULTS.md`
@@ -2086,6 +2174,13 @@ deadline is 2026-07-27 at 8:00 p.m. Pacific Time.
 - [OECD: firm AI adoption in 2025](https://www.oecd.org/en/about/news/announcements/2026/01/ai-use-by-individuals-surges-across-the-oecd-as-adoption-by-firms-continues-to-expand.html)
 - [Stanford HAI: 2026 AI Index, economy](https://hai.stanford.edu/ai-index/2026-ai-index-report/economy)
 - [European Commission: AI Act timeline](https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai)
+
+### Local model sources
+
+- [Google: Gemma 4 model overview](https://ai.google.dev/gemma/docs/core)
+- [Google: Gemma 4 model card](https://ai.google.dev/gemma/docs/core/model_card_4)
+- [Google: Run Gemma models](https://ai.google.dev/gemma/docs/run)
+- [Google: Gemma 4 Apache 2.0 license](https://ai.google.dev/gemma/apache_2)
 
 ### Security and procurement sources
 

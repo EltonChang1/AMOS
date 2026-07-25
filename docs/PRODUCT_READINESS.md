@@ -1,21 +1,29 @@
-# AMOS local product readiness
+# AMOS implementation readiness
 
-Status: **ready for the documented local production slice**
+Status: **control-layer reference slice complete; full analyst product not ready**
 
 Evidence date: 2026-07-22
 
 Release: `amos 0.2.0`
 
-This ledger maps the local boundary in `README.md`, the two papers, and
-`docs/RUST_REQUIREMENTS_MATRIX.md` to implementation and executable evidence.
-It does not qualify the deployment-only integrations listed below.
+> AMOS is an internally deployed analyst system that connects to company data
+> and tools, answers business questions, performs verified analysis, and
+> produces graphs, reports, and presentation slides.
+
+`docs/PRODUCT_REQUIREMENTS.md` is the canonical product target. This ledger
+reports what the current Rust implementation proves against that target. A
+complete local control-layer fixture is not the same as a complete customer
+product.
 
 ## Completion summary
 
-- P0 local gaps: none known.
-- P1 local gaps: none known.
-- P2 local gaps: none known.
-- P3 local deferrals: final throughput, RSS, and noisy-neighbor qualification
+- Current control-layer fixture: all documented local tests pass.
+- Product-critical gaps: local Gemma 4 agent, domain-neutral configuration,
+  report and slide planning, deterministic PPTX/PDF/spreadsheet generation,
+  production connectors, enterprise deployment, and customer validation.
+- Current payment-specific task, schema, metric, verifier, permissions, and UI
+  are a temporary fixture and must not define the product.
+- Capacity deferral: final throughput, RSS, and noisy-neighbor qualification
   must be repeated on named release hardware; current local benchmark evidence
   is deterministic and threshold-gated but is not a production capacity claim.
 - Generated demo databases, objects, proxy processes, and browser state were
@@ -50,13 +58,16 @@ It does not qualify the deployment-only integrations listed below.
 
 | Area | Local completion evidence | Deployment-only remainder |
 |---|---|---|
+| Analyst agent | Typed plans already record `model_identity`; runtime contracts are independent of a model SDK | Implement provider-neutral model routing and customer-local Gemma 4 inference with structured plan, narrative and slide-plan outputs |
+| Domain neutrality | Task definitions, schemas, metrics, policies and verifier profiles are typed and versioned | Remove payment constants and load all domain behavior from configuration or installable task packs |
+| Artifact generation | Deterministic SVG chart worker, typed artifacts, claim evidence and hash-addressed local publication | Produce editable PPTX, PDF/HTML reports, dashboards and spreadsheets from verified result objects |
 | Tenancy and identity | Tenant predicates and composite ownership are enforced in repositories and policy; static demo provider fails closed; 401/403 and second-analyst tests pass | Enterprise OIDC/SAML, issuer/JWKS/session lifecycle and PostgreSQL forced RLS need real tenants and infrastructure |
 | Storage concurrency and migrations | Eight-permit blocking lane; independent-connection CAS tests; checksummed forward migration ledger and restart-safe backfill | PostgreSQL pool/online DDL, backup, PITR and RLS rehearsal |
 | Retrieval and context | Policy filters are pushed before a bounded 2,000-candidate top-K; exact budgets and ambiguity corpus pass | Production search-service and million-object noisy-neighbor qualification |
 | Connector durability | Durable deduplicated cursors, health, capability-bound reads and restart tests | Customer credentials, rotation, quotas and vendor outage certification |
 | SQL and capabilities | Parser-enforced frozen subset, blocked columns, metric/time-window checks, HMAC binding, query-only driver and cancellation/limits | KMS/HSM custody and isolated remote-worker identity/egress |
 | Runtime recovery | State-driven recovery resumes fourteen automatic/post-review boundaries without duplicate evidence | Multi-process controller election and distributed placement |
-| Verification | Numeric rates, concentration, statistics, schema/metric references and deterministic chart hash are independently recomputed | Additional domain verifier packs beyond payment health |
+| Verification | Numeric rates, concentration, statistics, schema/metric references and deterministic chart hash are independently recomputed in the reference fixture | Configuration-driven verifier packs for general business analysis and real customer tasks |
 | Policy and invalidation | Independent dimensions, bounded reverse traversal, visited set, quotas, durable cursors and idempotent revalidation | External policy evaluator and organization activation workflow |
 | Replay and publication | Separate replay A-TXN/comparisons; staged, fsynced, hash-checked and atomically promoted filesystem objects | S3/GCS lifecycle/residency and external destination acknowledgments |
 | Outbox and jobs | Lease owner/fence checks, renewal, retry/backoff, dead letter, bounded workers and recovery | Broker adapter, production alert routing |
@@ -146,7 +157,7 @@ memory objects and passed every threshold.
 
 ## Intentional boundaries and non-goals
 
-The local product does not claim PostgreSQL/RLS, enterprise identity, KMS/HSM,
+The current implementation does not claim PostgreSQL/RLS, enterprise identity, KMS/HSM,
 cloud object lifecycle, customer-warehouse credentials, isolated remote
 workers, brokers, telemetry backends or external publication destinations.
 Those require real deployment infrastructure and conformance evidence.
@@ -156,11 +167,16 @@ EDA, general multi-agent scheduling, free-form authoritative claim extraction,
 unreviewed causal conclusions and autonomous external communication remain
 intentional non-goals. They were not added to inflate local scope.
 
+The following are required product features, not non-goals: a bundled local
+analyst agent, open-ended business questions within configured permissions,
+graphs, reports, editable presentation slides, dashboards, spreadsheets, and a
+supported internal customer deployment.
+
 ## Honest residual risk
 
-SQLite and loopback filesystem behavior prove the local contracts, not the
+SQLite and loopback filesystem behavior prove the control-layer contracts, not the
 failure envelope of a distributed deployment. The static bearer identities are
 demo-only. Interactive browser use requires a dedicated local header rule; the
 credential must never be placed in a URL. Capacity numbers describe this local
-machine and build only. These boundaries are explicit and do not leave a known
-P0, P1 or P2 gap inside the promised local slice.
+machine and build only. These boundaries leave no known critical gap inside
+the legacy reference fixture, but the full product gaps above remain open.

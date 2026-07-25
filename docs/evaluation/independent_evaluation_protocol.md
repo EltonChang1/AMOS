@@ -2,6 +2,10 @@
 
 ## Purpose
 
+AMOS is an internally deployed analyst system that connects to company data
+and tools, answers business questions, performs verified analysis, and produces
+graphs, reports, and presentation slides.
+
 This protocol defines the evidence required before AMOS results may be described as independently evaluated, statistically generalizable, or representative of deployed products. The current seeded benchmark does not meet those thresholds and remains engineering evidence.
 
 ## Preregistration Boundary
@@ -33,6 +37,13 @@ No task-specific verifier, retrieval, prompt, or scoring changes may be made aft
 - Include multi-turn tasks and tasks that require clarification or refusal.
 - Include normal tasks, not only cases targeting AMOS invariants.
 - Include schema evolution, metric changes, late data, permission conflicts, ambiguous definitions, stale analyses, feedback, and unsupported causal pressure.
+- Require end-to-end deliverables: verified graphs, a written report, an
+  editable presentation, and source-linked evidence where the task calls for
+  them.
+- Measure analyst time displaced, artifact correction time, unsupported claims,
+  number accuracy, chart-data equality, and slide-to-evidence correctness.
+- Evaluate the customer-local Gemma 4 profile and at least two other model
+  families behind the same AMOS permissions, tools, and task definitions.
 - Include tasks for which the correct outcome is `pass`, `warning`, `repair`, `reject`, or `needs_review`.
 
 ## Task Record

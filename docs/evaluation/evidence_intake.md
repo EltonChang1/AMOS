@@ -1,5 +1,11 @@
 # AMOS Independent Evidence Intake
 
+The target product is an internally deployed analyst system that connects to
+company data and tools, answers business questions, performs verified analysis,
+and produces graphs, reports, and presentation slides. Evidence intake must
+therefore preserve complete artifacts and their source links, not only the
+model's final text.
+
 This guide converts externally collected tasks, annotations, product runs, and system outputs into auditable AMOS evaluation artifacts. The tools validate evidence; they do not manufacture independence or upgrade synthetic fixtures into human evidence.
 
 ## Evidence Classes

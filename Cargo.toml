@@ -2,7 +2,7 @@
 name = "amos"
 version = "0.2.0"
 edition = "2024"
-description = "Rust-native memory operating layer for governed analytical agents"
+description = "Internally deployed analyst system for verified company analysis and artifacts"
 license = "MIT"
 
 [lib]
