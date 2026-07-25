@@ -1,12 +1,6 @@
 # AMOS Company, Product, Investor, and YC FAQ
 
-Last researched and verified: 2026-07-25
 
-This document answers the questions a customer, employee, investor, or
-Y Combinator reviewer is likely to ask about AMOS. It uses plain language and
-separates working software from plans.
-
-## How to read this document
 
 Every business answer falls into one of three categories:
 
@@ -17,8 +11,7 @@ Every business answer falls into one of three categories:
 - **Founder input required:** the repository does not contain the personal,
   legal, financial, or customer fact needed to answer honestly.
 
-Do not remove those distinctions when copying an answer into an application or
-pitch. Replace every bracketed item with a verified fact before submission.
+
 
 YC's own guidance is simple: answer the question in the first sentence, use
 specific facts, avoid marketing language, and disclose important obstacles.
