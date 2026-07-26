@@ -59,6 +59,20 @@ fixture, not the AMOS product definition.
 
 The application, CLI, API, UI rendering, persistence, connectors, workers, and tests are all written in Rust. SQLite supplies reproducible local warehouse and control-plane adapters; the domain contracts remain independent of SQLite, Axum, or any model SDK.
 
+## How it started
+
+While studying data analytics at Carnegie Mellon, I worked on a PNC-sponsored Next Best Action project, built the Ashe system, and completed several other analytics projects. Although their outputs differed, the same work kept repeating: translating a business question into the right data and definitions, cleaning and reconciling the data, choosing and running the right analysis, verifying the results, and presenting them in a form decision-makers could use.
+
+I realized that the most valuable part was not any individual application. It was the workflow for choosing and coordinating the right tools behind all of them.
+
+Existing AI tools could help with isolated steps such as writing SQL or Python, but I could not find a system I would trust to perform the complete analyst workflow inside a company. For organizations with sensitive data, an AI analyst must operate within their environment, understand their business definitions, follow existing permissions, perform calculations with reliable tools, and connect every conclusion to supporting evidence. The model can propose the work, but it should not control access or become the source of truth.
+
+After graduating, I began building AMOS and asked Perry, a close friend since high school, to join me. David and Divvy later joined the team. All four founders are technical and write code; we have built the core product ourselves without contractors.
+
+In our first month, we built a working Rust prototype that controls data access, executes and verifies analyses, preserves supporting evidence, and produces reviewable results. We also interviewed nine data leaders, analysts, and technical experts. CMU faculty helped us refine the technical approach, while industry practitioners helped us test the customer need.
+
+These experiences led to our core insight: better models alone will not unlock AI analysts inside enterprises. Models are becoming capable of proposing SQL, analyses, and explanations. The remaining bottleneck is trust—controlling what the AI can access, verifying its work outside the model, and tracing every conclusion back to evidence. AMOS provides that operating layer.
+
 ## Quick start
 
 Install the stable Rust toolchain, then seed and run the local MVP:
