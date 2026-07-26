@@ -12,7 +12,7 @@ the resulting claims, and produces decision-ready artifacts.
 
 The long-term product goal is to automate the end-to-end work now performed by
 data analysts and business analysts. The first releases prove that goal one
-recurring workflow at a time and retain review where the evidence or impact
+recurring workflow at a time and retain review where the evidence or impact 
 requires human judgment.
 
 ## Product flow
