@@ -22,6 +22,7 @@ use crate::{
         PlanStep, TypedPlan, content_hash, new_id,
     },
     error::AmosError,
+    verification::sql_relation_references,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -320,8 +321,21 @@ impl StatisticsWorker {
 pub struct ChartWorker;
 impl ChartWorker {
     pub fn timeseries_svg(&self, points: &[(String, f64)]) -> Result<(String, String)> {
+        self.timeseries_svg_with_label(points, "Failure rate by hour")
+    }
+
+    pub fn timeseries_svg_with_label(
+        &self,
+        points: &[(String, f64)],
+        accessible_label: &str,
+    ) -> Result<(String, String)> {
         if points.is_empty() {
             return Err(AmosError::Validation("chart requires points".into()));
+        }
+        if accessible_label.trim().is_empty() {
+            return Err(AmosError::Validation(
+                "chart requires an accessible label".into(),
+            ));
         }
         let max = points
             .iter()
@@ -339,11 +353,21 @@ impl ChartWorker {
             .collect::<Vec<_>>()
             .join(" ");
         let svg = format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 260" role="img" aria-label="Failure rate by hour"><rect width="600" height="260" fill="#fffefa"/><line x1="40" y1="220" x2="560" y2="220" stroke="#b7beb8"/><polyline fill="none" stroke="#1f5a3d" stroke-width="4" points="{coords}"/></svg>"##
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 260" role="img" aria-label="{}"><rect width="600" height="260" fill="#fffefa"/><line x1="40" y1="220" x2="560" y2="220" stroke="#b7beb8"/><polyline fill="none" stroke="#1f5a3d" stroke-width="4" points="{coords}"/></svg>"##,
+            escape_xml_attribute(accessible_label),
         );
         let hash = content_hash(&svg)?;
         Ok((svg, hash))
     }
+}
+
+fn escape_xml_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn declared_relations(step: &PlanStep) -> Result<BTreeSet<String>> {
@@ -376,6 +400,14 @@ fn validate_sql_bindings(
     fence: u64,
 ) -> Result<()> {
     let claims = &capability.claims;
+    let sql = step
+        .parameters
+        .get("sql")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AmosError::Validation("SQL step has no sql parameter".into()))?;
+    let declared = declared_relations(step)?;
+    let referenced = sql_relation_references(sql)
+        .map_err(|_| AmosError::Capability("SQL relation parsing failed".into()))?;
     let expected_limits = CapabilityLimits {
         seconds: step.limits.seconds,
         rows: step.limits.rows,
@@ -396,7 +428,9 @@ fn validate_sql_bindings(
         || claims.tool != step.tool
         || claims.source_id != step.source_id
         || claims.operations != expected_operations
-        || claims.relations != declared_relations(step)?
+        || claims.relations != declared
+        || referenced.is_empty()
+        || !referenced.is_subset(&claims.relations)
         || claims.limits != expected_limits
         || claims.limits.seconds == 0
         || claims.limits.rows == 0
@@ -643,6 +677,7 @@ mod tests {
                 VALUES(0) UNION ALL SELECT x + 1 FROM count WHERE x < 1000000000
              ) SELECT sum(x) FROM count"
         );
+        step.parameters["relations"] = json!(["count"]);
         step.limits = OperationLimits {
             seconds: 1,
             rows: 10,

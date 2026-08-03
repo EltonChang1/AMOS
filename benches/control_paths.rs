@@ -14,6 +14,9 @@ use amos::{
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::{Value, json};
+
+#[path = "../tests/common/mod.rs"]
+mod common;
 use tempfile::TempDir;
 
 fn percentile(samples: &mut [Duration], percentile: usize) -> Duration {
@@ -72,13 +75,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &identity.tenant_id,
             format!("benchmark:memory:{index}"),
             MemoryType::Document,
-            format!("payment benchmark evidence item {index}"),
-            json!({"role":"benchmark","index":index,"topic":"payment failure"}),
+            format!("churn benchmark evidence item {index}"),
+            json!({"role":"benchmark","index":index,"topic":"subscription churn"}),
             "benchmark",
             format!("v{index}"),
             Authority::SystemObserved,
         )?;
-        object.permissions = BTreeSet::from(["analytics".into(), "payments".into()]);
+        object.permissions = BTreeSet::from(["analytics".into(), "subscriptions".into()]);
         store.write_memory(&object)?;
     }
     let service = MemoryService::new(store.clone(), PolicyEngine);
@@ -86,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let result = service.retrieve(
             identity,
             &RetrieveQuery {
-                task_text: "payment failure evidence".into(),
+                task_text: "subscription churn evidence".into(),
                 required_types: BTreeSet::from([MemoryType::Document]),
                 time_start: Utc::now() - ChronoDuration::days(1),
                 time_end: Utc::now() + ChronoDuration::days(1),
@@ -102,15 +105,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(if cfg!(debug_assertions) { 5 } else { 10 });
-    let config = RuntimeConfig::demo(root.path());
+    let config = RuntimeConfig::demo(root.path())?;
     let control_store = Store::open(&config.control_db)?;
     seed::seed_demo(&control_store, &config.warehouse_db)?;
-    let runtime = AmosRuntime::open(config)?;
+    let runtime = AmosRuntime::open_with_model(config, common::test_model())?;
     let tokio = tokio::runtime::Builder::new_multi_thread().build()?;
     let identities = demo_identities();
     let analyst = &identities["analyst_001"];
     let reviewer = &identities["reviewer_001"];
-    let task_text = "Why did payment failure rate increase over the last six hours, and should we update the executive dashboard?";
+    let task_text = "Why did SMB logo churn increase this week, and should the executive dashboard attribute it to the pricing email?";
     let reference_run = tokio.block_on(runtime.run_task(
         analyst,
         task_text.into(),

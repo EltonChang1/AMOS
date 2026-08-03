@@ -36,8 +36,10 @@ The complete target product is defined in
 implementation proves the control-layer foundation with one configured tenant,
 one read-only SQLite connector, deterministic statistics and charting,
 governed documents, typed report claims, review, invalidation, replay, and
-local publication. Its payment-specific workflow is a temporary reference
-fixture, not the AMOS product definition.
+local publication. All workflow behavior is loaded from a versioned,
+schema-validated analysis packs (see `demo/*/pack.json`); the
+subscription-churn pack is the default bootstrap configuration, not a hardcoded
+workflow.
 
 - [Research paper](papers/AMOS_research_paper.pdf): the memory-operating abstraction, core primitives, reference scenario, and evaluation.
 - [Design proposal](papers/AMOS_design_proposal.pdf): the product architecture and normative Specifications A–F.
@@ -75,17 +77,25 @@ These experiences led to our core insight: better models alone will not unlock A
 
 ## Quick start
 
-Install the stable Rust toolchain, then seed and run the local MVP:
+Install the stable Rust toolchain, configure the approved model boundary, then
+run the subscription-churn vertical slice:
 
 ```bash
-cargo run -- --demo seed
-cargo run -- --demo serve
+cp .env.example .env
+# Set GEMINI_API_KEY in .env. Never commit it.
+set -a; source .env; set +a
+
+cargo run --release --locked -- \
+  --demo --root .demo-recording \
+  serve --seed-demo --bind 127.0.0.1 --port 8000
 ```
 
 The bundled binary is fail-closed unless `--demo` (or `AMOS_DEMO=true`) is
 explicitly set. The demo uses a named demo signing key and static local
 identities; embedding applications must construct `RuntimeConfig::new` with
 their own capability secret and pass an `IdentityProvider` to `api::router`.
+There is no deterministic production planner: a missing, unavailable, or
+invalid model fails before plan execution and publication.
 
 Every API and UI route except `/health` and `/v1/openapi.json` requires an explicit bearer identity.
 For example:
@@ -102,14 +112,30 @@ The authenticated product surfaces are:
 - `/reviews` — Review Queue
 - `/operations` — Operations Console
 
-For an interactive browser walkthrough, configure a dedicated local browser
-profile or request-header rule to attach `Authorization: Bearer IDENTITY` to
-`http://127.0.0.1:8000/*`. Keep the credential in the header: never place it in
-a URL. Same-origin, server-rendered forms then preserve that header through the
-analysis, memory-search/write, replay, review/correction, source-event, and
-retention workflows. Switch the rule between `analyst_001`, `reviewer_001`, and
-`admin` when demonstrating role boundaries. The application intentionally does
-not create a weaker demo cookie or accept identity fields from forms.
+The explicit local demo also includes a scripted retail-banking advisor concept:
+
+```bash
+cargo run -- --demo --root .demo-advisor serve --seed-demo --bind 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/demo/login`, continue as Advisor, and select
+`Open Advisor Workspace`. The prefilled question is:
+
+> Tell me about this client and what should I sell to him
+
+Submitting it renders a synthetic client briefing with a relationship timeline,
+peer-product adoption chart, available-balance chart, next-best conversation,
+alternative product, talking points, suitability guardrails, and evidence
+placeholders. This surface is intentionally labeled as a scripted future-product
+preview: it does not call Gemma, query live banking data, or perform a sale or
+enrollment. The governed subscription workflow remains the executable product
+slice.
+
+For an interactive browser walkthrough, open `http://127.0.0.1:8000/` and use
+the visible `Local demo identity` switch. It maps only the fixed Analyst,
+Reviewer, and Administrator demo identities through a random server-side
+session in an `HttpOnly`, `SameSite=Strict` cookie. Demo session and governed
+source-successor routes are absent from `api::router`, the production router.
 
 The explicit demo mode accepts local bearer identities `analyst_001`,
 `analyst_002`, `reviewer_001`, and `admin`. They exist only for local
@@ -118,19 +144,19 @@ embedding deployment. Missing, malformed, and unknown credentials return
 `401 UNAUTHENTICATED`; authenticated identities that lack authority return
 `403 PERMISSION_DENIED`.
 
-Run the current legacy reference fixture from the CLI:
+Run the subscription question from the CLI:
 
 ```bash
 cargo run -- --demo run \
-  --idempotency-key payment-health-001 \
-  --request "Why did payment failure rate increase over the last six hours, and should we update the executive dashboard?"
+  --idempotency-key subscription-churn-001 \
+  --request "Why did SMB logo churn increase this week, and should the executive dashboard attribute it to the pricing email?"
 ```
 
-This fixture is retained only to exercise the implemented runtime until a
-domain-neutral company-analysis fixture replaces it. The run returns a context
-manifest, typed plan, verified executions, report, claims, dependencies, replay
-package, and an explicit `needs_review` outcome. Replay the resulting artifact
-with:
+The run calls the configured Gemma provider for planning and narrative,
+executes three admitted read-only SQL steps outside the model, and returns a
+context manifest, typed plan, verified executions, safe HTML report, claims,
+dependencies, replay package, and explicit `needs_review` outcome. Replay the
+resulting artifact with:
 
 ```bash
 cargo run -- --demo replay ARTIFACT_ID --idempotency-key replay-001
@@ -141,6 +167,19 @@ Use a separate data root or port when needed:
 ```bash
 cargo run -- --demo --root /tmp/amos-demo serve --port 8080 --seed-demo
 ```
+
+The full release and 90-second recording procedure is in
+[the demo runbook](docs/DEMO_RUNBOOK.md). A live compatibility probe and full
+HTTP smoke/rehearsal are:
+
+```bash
+scripts/live-model-smoke.sh
+scripts/demo-smoke.sh
+scripts/rehearse-recording.sh
+```
+
+Set `AMOS_PROBE_ROOT=.demo-recording` when the compatibility result should
+remain visible from that recording server's `/health` response.
 
 ## HTTP contract
 

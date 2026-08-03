@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 pub mod api;
+pub mod artifacts;
 pub mod auth;
 pub mod connectors;
 pub mod context;
@@ -8,8 +9,11 @@ pub mod domain;
 pub mod error;
 pub mod evidence;
 pub mod memory;
+pub mod model;
 pub mod observability;
+pub mod packs;
 pub mod policy;
+pub mod privacy;
 pub mod publication;
 pub mod runtime;
 pub mod scheduler;

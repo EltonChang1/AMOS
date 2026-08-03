@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use crate::{
     Result,
     domain::{
-        AnalyticalTransaction, Artifact, Authority, Claim, Identity, MemoryObject,
-        PolicyVisibility, RiskClass, TaskDefinition,
+        AnalyticalTransaction, Artifact, Authority, Claim, ContextManifest, Identity, MemoryObject,
+        MemoryType, PolicyVisibility, RiskClass, TaskDefinition,
     },
     error::AmosError,
 };
@@ -76,6 +76,7 @@ impl PolicyEngine {
         &self,
         identity: &Identity,
         definition: &TaskDefinition,
+        manifest: &ContextManifest,
         tool: &str,
         relations: &BTreeSet<String>,
     ) -> Result<()> {
@@ -84,9 +85,23 @@ impl PolicyEngine {
                 "tool {tool} is not allowed"
             )));
         }
-        if !relations.is_subset(&identity.permissions) {
+        let visible_relations = manifest
+            .selected_objects
+            .iter()
+            .filter(|object| object.memory_type == MemoryType::Schema)
+            .filter(|object| self.can_read_memory(identity, object))
+            .filter_map(|object| {
+                object
+                    .content
+                    .get("relation")
+                    .or_else(|| object.content.get("table"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect::<BTreeSet<_>>();
+        if relations.is_empty() || !relations.is_subset(&visible_relations) {
             return Err(AmosError::PermissionDenied(
-                "tool relation is not permitted".into(),
+                "tool relation is not covered by a policy-visible selected schema".into(),
             ));
         }
         Ok(())

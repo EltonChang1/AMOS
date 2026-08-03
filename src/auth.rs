@@ -49,22 +49,26 @@ pub fn demo_identities() -> BTreeMap<String, Identity> {
     BTreeMap::from([
         (
             "analyst_001".into(),
-            identity("analyst_001", &["analyst"], &["analytics", "payments"]),
+            identity("analyst_001", &["analyst"], &["analytics", "subscriptions"]),
         ),
         (
             "analyst_002".into(),
-            identity("analyst_002", &["analyst"], &["analytics", "payments"]),
+            identity("analyst_002", &["analyst"], &["analytics", "subscriptions"]),
         ),
         (
             "reviewer_001".into(),
-            identity("reviewer_001", &["reviewer"], &["analytics", "payments"]),
+            identity(
+                "reviewer_001",
+                &["reviewer"],
+                &["analytics", "subscriptions"],
+            ),
         ),
         (
             "admin".into(),
             identity(
                 "admin",
                 &["admin", "owner", "reviewer"],
-                &["analytics", "payments", "sre", "admin"],
+                &["analytics", "subscriptions", "sre", "admin"],
             ),
         ),
     ])

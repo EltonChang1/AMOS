@@ -98,6 +98,11 @@ impl EvidenceService {
             .store
             .get_transaction(&identity.tenant_id, &artifact.atxn_id)?
             .ok_or_else(|| AmosError::NotFound(artifact.atxn_id.clone()))?;
+        if identity.subject_id == transaction.subject_id {
+            return Err(AmosError::PermissionDenied(
+                "the admitting analyst cannot review their own artifact".into(),
+            ));
+        }
         self.policy
             .authorize_artifact_read(identity, &artifact, &transaction)?;
         let claims = self.store.list_claims(&identity.tenant_id, artifact_id)?;
@@ -153,7 +158,7 @@ impl EvidenceService {
             &identity.tenant_id,
             format!("feedback:{artifact_id}:{}", review.review_id),
             MemoryType::Feedback,
-            format!("Payment health reviewer feedback: {comment}"),
+            format!("Analysis reviewer feedback: {comment}"),
             json!({"artifact_id":artifact_id,"claim_ids":normalized_claim_ids,"decision":decision,"correction":correction,"effective_from":review.effective_from,"role":"reviewer_feedback"}),
             "review",
             review.review_id.clone(),

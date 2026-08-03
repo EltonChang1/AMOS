@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
 use std::process::Command;
+use std::{collections::BTreeSet, sync::Arc};
 
 use amos::{
     AmosRuntime, RuntimeConfig, api,
+    auth::StaticIdentityProvider,
     domain::{Artifact, AuditEvent, PolicyVisibility, RunResult, new_id},
     seed,
     store::Store,
@@ -17,12 +18,14 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+mod common;
+
 fn app() -> (TempDir, Router) {
     let root = TempDir::new().unwrap();
-    let config = RuntimeConfig::demo(root.path());
+    let config = RuntimeConfig::demo(root.path()).unwrap();
     let store = Store::open(&config.control_db).unwrap();
     seed::seed_demo(&store, &config.warehouse_db).unwrap();
-    let runtime = AmosRuntime::open(config).unwrap();
+    let runtime = AmosRuntime::open_with_model(config, common::test_model()).unwrap();
     (root, api::demo_router(runtime))
 }
 
@@ -93,7 +96,7 @@ async fn versioned_api_exposes_the_complete_local_mvp_contract() {
         "/v1/tasks",
         "analyst_001",
         Some(json!({
-            "request":"Why did payment failures increase?",
+            "request":"Why did SMB logo churn increase this week?",
             "idempotency_key":"api-contract"
         })),
     )
@@ -121,11 +124,19 @@ async fn versioned_api_exposes_the_complete_local_mvp_contract() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let evidence: Value = serde_json::from_slice(&body).unwrap();
+    assert!(!evidence["dependencies"].as_array().unwrap().is_empty());
+    assert!(!evidence["executions"].as_array().unwrap().is_empty());
+    assert!(!evidence["verifications"].as_array().unwrap().is_empty());
     assert!(
-        !serde_json::from_slice::<Value>(&body).unwrap()["dependencies"]
+        evidence["model_invocations"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|invocation| {
+                invocation.get("output_text").is_none()
+                    && invocation.get("sanitized_input").is_none()
+            })
     );
 
     let (status, body) = request(
@@ -133,7 +144,7 @@ async fn versioned_api_exposes_the_complete_local_mvp_contract() {
         "POST",
         "/v1/memory/search",
         "analyst_001",
-        Some(json!({"task_text":"payment failure metric","max_items":10})),
+        Some(json!({"task_text":"SMB logo churn metric","max_items":10})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -150,8 +161,8 @@ async fn versioned_api_exposes_the_complete_local_mvp_contract() {
         "/v1/verify/sql",
         "analyst_001",
         Some(json!({
-            "request":"payment failure",
-            "sql":"SELECT COUNT(*) AS attempts FROM payment_events WHERE event_time >= '2026-07-07T08:00:00Z' AND event_time < '2026-07-07T20:00:00Z' AND environment = 'production' AND is_test_account = 0"
+            "request":"SMB logo churn",
+            "sql":"SELECT COUNT(*) AS eligible_accounts FROM subscription_events WHERE event_date >= '2026-07-13' AND event_date < '2026-07-27' AND segment = 'SMB' AND environment = 'production' AND is_test_account = 0"
         })),
     )
     .await;
@@ -253,6 +264,8 @@ async fn openapi_documents_every_versioned_route_and_public_security_boundary() 
         "/v1/memory/{id}/supersede",
         "/v1/metrics",
         "/v1/openapi.json",
+        "/v1/packs",
+        "/v1/packs/{id}",
         "/v1/replay/{id}",
         "/v1/retention",
         "/v1/retention/memory/{id}/erase",
@@ -282,7 +295,7 @@ async fn four_product_surfaces_expose_the_governed_demo_and_safe_role_actions() 
         "/v1/tasks",
         "analyst_001",
         Some(json!({
-            "request":"Why did payment failure rate increase over the last six hours?",
+            "request":"Why did SMB logo churn increase this week, and should the executive dashboard attribute it to the pricing email?",
             "idempotency_key":"surface-walkthrough"
         })),
     )
@@ -301,7 +314,10 @@ async fn four_product_surfaces_expose_the_governed_demo_and_safe_role_actions() 
         let html = String::from_utf8(body).unwrap();
         assert!(html.contains(expected), "{uri}: {expected}");
         assert!(html.contains("<nav>"), "{uri}");
-        assert!(!html.contains("name=\"identity\""), "{uri}");
+        if uri == "/" {
+            assert!(html.contains("Local demo identity"));
+            assert!(html.contains("action='/demo/identity'"));
+        }
         if uri == "/reviews" {
             assert!(html.contains("Append correction"));
             assert!(html.contains("Structured correction"));
@@ -317,7 +333,7 @@ async fn four_product_surfaces_expose_the_governed_demo_and_safe_role_actions() 
         "POST",
         "/ui/memory/search",
         Some("Bearer analyst_001"),
-        b"task_text=payment+failure+metric".to_vec(),
+        b"task_text=SMB+logo+churn+metric".to_vec(),
         Some("application/x-www-form-urlencoded"),
     )
     .await;
@@ -333,8 +349,7 @@ async fn four_product_surfaces_expose_the_governed_demo_and_safe_role_actions() 
         "POST",
         "/ui/memory/notes",
         Some("Bearer analyst_001"),
-        b"logical_key=note%3Apayment-ui&summary=Observed+retry+pattern&content=Needs+review"
-            .to_vec(),
+        b"logical_key=note%3Achurn-ui&summary=Observed+churn+pattern&content=Needs+review".to_vec(),
         Some("application/x-www-form-urlencoded"),
     )
     .await;
@@ -344,7 +359,7 @@ async fn four_product_surfaces_expose_the_governed_demo_and_safe_role_actions() 
     let note = serde_json::from_slice::<Vec<Value>>(&body)
         .unwrap()
         .into_iter()
-        .find(|object| object["logical_key"] == "note:payment-ui")
+        .find(|object| object["logical_key"] == "note:churn-ui")
         .unwrap();
     assert_eq!(note["authority"], "user_note");
     assert_eq!(note["governing"], false);
@@ -422,6 +437,60 @@ async fn four_product_surfaces_expose_the_governed_demo_and_safe_role_actions() 
 }
 
 #[tokio::test]
+async fn advisor_concept_demo_accepts_a_question_and_renders_the_complete_synthetic_briefing() {
+    let (_root, app) = app();
+    let (status, body) = request_raw(&app, "GET", "/demo/login", None, vec![], None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("Continue as Advisor")
+    );
+
+    let (status, body) = request(&app, "GET", "/advisor-demo", "analyst_001", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    for expected in [
+        "Retail banking · Advisor workspace",
+        "Jordan Lee",
+        "Tell me about this client and what should I sell to him",
+        "Synthetic client and cohort",
+        "No sale or enrollment occurs",
+    ] {
+        assert!(html.contains(expected), "{expected}");
+    }
+
+    let (status, body) = request_raw(
+        &app,
+        "POST",
+        "/advisor-demo/analyze",
+        Some("Bearer analyst_001"),
+        b"request=Tell+me+about+this+client+and+what+should+I+sell+to+him%3F%3Cscript%3E".to_vec(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    for expected in [
+        "Jordan’s next best",
+        "High-yield savings account",
+        "How Jordan’s needs evolved",
+        "What similar clients adopt",
+        "Available balance trend",
+        "Suggested conversation opener",
+        "Alternative and exclusions",
+        "Advisor guardrails",
+        "Evidence and decision trace",
+        "Protected data excluded",
+        "This scripted preview shows the intended AMOS experience",
+    ] {
+        assert!(html.contains(expected), "{expected}");
+    }
+    assert!(html.contains("&lt;script&gt;"));
+    assert!(!html.contains("<script>"));
+}
+
+#[tokio::test]
 async fn retention_api_erases_due_memory_and_revokes_dependent_claim_visibility() {
     let (_root, app) = app();
     let (status, body) = request(
@@ -430,7 +499,7 @@ async fn retention_api_erases_due_memory_and_revokes_dependent_claim_visibility(
         "/v1/tasks",
         "analyst_001",
         Some(json!({
-            "request":"Why did payment failure rate increase over the last six hours?",
+            "request":"Why did SMB logo churn increase this week, and should the executive dashboard attribute it to the pricing email?",
             "idempotency_key":"erasure-task"
         })),
     )
@@ -489,7 +558,7 @@ async fn artifact_cursor_pagination_is_opaque_stable_and_fail_closed() {
             "/v1/tasks",
             "analyst_001",
             Some(json!({
-                "request":"Why did payment failure rate increase?",
+                "request":"Why did SMB logo churn increase this week?",
                 "idempotency_key":key
             })),
         )
@@ -585,6 +654,44 @@ async fn protected_api_and_ui_routes_fail_closed_without_valid_bearer_credential
 }
 
 #[tokio::test]
+async fn health_reports_only_safe_runtime_boundary_and_compatibility_state() {
+    let (_root, app) = app();
+    let (status, body) = request_raw(&app, "GET", "/health", None, vec![], None).await;
+    assert_eq!(status, StatusCode::OK);
+    let health: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(health["status"], "ok");
+    assert_eq!(health["runtime"], "rust");
+    assert_eq!(health["app_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        health["schema_version"],
+        amos::store::CURRENT_SCHEMA_VERSION
+    );
+    assert_eq!(health["model"]["provider"], "stub");
+    assert_eq!(health["model"]["name"], "test-gemma");
+    assert_eq!(health["model"]["route_class"], "local");
+    assert_eq!(health["model"]["compatibility_probe_passed"], false);
+    assert_eq!(health["warehouse"]["status"], "healthy");
+    assert_eq!(health["external_telemetry"], "disabled");
+    assert!(
+        health["allowed_egress_hosts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let visible = String::from_utf8(body).unwrap();
+    for forbidden in [
+        "GEMINI_API_KEY",
+        "Authorization",
+        "Bearer ",
+        "amos_demo_session",
+        seed::WAREHOUSE_RAW_CANARY,
+        seed::RESTRICTED_MEMORY_CANARY,
+    ] {
+        assert!(!visible.contains(forbidden), "{forbidden}");
+    }
+}
+
+#[tokio::test]
 async fn api_enforces_request_limits_idempotency_and_browser_security_headers() {
     let (_root, app) = app();
     let response = app
@@ -640,7 +747,7 @@ async fn api_enforces_request_limits_idempotency_and_browser_security_headers() 
 async fn task_admission_returns_a_stable_idempotency_conflict_for_a_changed_request() {
     let (_root, app) = app();
     let payload = json!({
-        "request":"Investigate payment failures",
+        "request":"Investigate the SMB logo churn increase",
         "idempotency_key":"api-idempotency-conflict"
     });
     let (status, _) = request(&app, "POST", "/v1/tasks", "analyst_001", Some(payload)).await;
@@ -667,7 +774,7 @@ async fn review_mutations_are_idempotent_and_commit_one_feedback_job_and_event()
         "/v1/tasks",
         "analyst_001",
         Some(json!({
-            "request":"Review the payment failure evidence",
+            "request":"Review the SMB churn evidence",
             "idempotency_key":"review-idempotency-task"
         })),
     )
@@ -791,11 +898,34 @@ fn bundled_binary_initializes_demo_storage_only_when_demo_mode_is_explicit() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(root.path().join("data/amos.sqlite").exists());
-    assert!(root.path().join("data/payments.sqlite").exists());
+    assert!(root.path().join("data/warehouse.sqlite").exists());
 }
 
 #[test]
-fn bundled_cli_run_requires_and_honors_a_caller_supplied_idempotency_key() {
+fn bundled_demo_server_rejects_non_loopback_binding_without_container_guard() {
+    let root = TempDir::new().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_amos"))
+        .args([
+            "--demo",
+            "--root",
+            root.path().to_str().unwrap(),
+            "serve",
+            "--bind",
+            "0.0.0.0",
+            "--port",
+            "18081",
+        ])
+        .env_remove("AMOS_DEMO_LOOPBACK_PUBLISH")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("loopback binding"));
+    assert!(!root.path().join("data/amos.sqlite").exists());
+}
+
+#[test]
+fn bundled_cli_run_requires_a_key_and_fails_closed_without_a_model_provider() {
     let root = TempDir::new().unwrap();
     let root_arg = root.path().to_str().unwrap();
     let missing = Command::new(env!("CARGO_BIN_EXE_amos"))
@@ -805,49 +935,81 @@ fn bundled_cli_run_requires_and_honors_a_caller_supplied_idempotency_key() {
             root_arg,
             "run",
             "--request",
-            "Investigate payment failures",
+            "Why did SMB logo churn increase this week, and should the executive dashboard attribute it to the pricing email?",
         ])
         .output()
         .unwrap();
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("--idempotency-key"));
 
-    let mut artifact_id = None;
-    let mut durable_counts = None;
-    for _ in 0..2 {
-        let output = Command::new(env!("CARGO_BIN_EXE_amos"))
-            .args([
-                "--demo",
-                "--root",
-                root_arg,
-                "run",
-                "--request",
-                "Investigate payment failures",
-                "--idempotency-key",
-                "cli-task-repeat",
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let run: RunResult = serde_json::from_slice(&output.stdout).unwrap();
-        match artifact_id.as_ref() {
-            Some(expected) => assert_eq!(expected, &run.artifact.artifact_id),
-            None => artifact_id = Some(run.artifact.artifact_id),
-        }
-        let store = Store::open(root.path().join("data/amos.sqlite")).unwrap();
-        let counts = (
-            store.list_audit(seed::TENANT, 250).unwrap().len(),
-            store.list_outbox(seed::TENANT, 500).unwrap().len(),
-        );
-        match durable_counts {
-            Some(expected) => assert_eq!(expected, counts),
-            None => durable_counts = Some(counts),
-        }
-    }
+    let output = Command::new(env!("CARGO_BIN_EXE_amos"))
+        .args([
+            "--demo",
+            "--root",
+            root_arg,
+            "run",
+            "--request",
+            "Why did SMB logo churn increase this week, and should the executive dashboard attribute it to the pricing email?",
+            "--idempotency-key",
+            "cli-task-no-model",
+        ])
+        .env_remove("AMOS_MODEL_PROVIDER")
+        .env_remove("GEMINI_API_KEY")
+        .env_remove("GEMINI_API_KEY_FILE")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .to_ascii_lowercase()
+            .contains("modelunavailable")
+    );
+    let store = Store::open(root.path().join("data/amos.sqlite")).unwrap();
+    assert!(store.list_artifacts(seed::TENANT, 10).unwrap().is_empty());
+}
+
+#[test]
+fn bundled_model_bootstrap_rejects_false_air_gap_claim_without_leaking_the_key() {
+    let root = TempDir::new().unwrap();
+    let secret = "never-print-this-gemini-key";
+    let output = Command::new(env!("CARGO_BIN_EXE_amos"))
+        .args([
+            "--demo",
+            "--root",
+            root.path().to_str().unwrap(),
+            "model-probe",
+        ])
+        .env("AMOS_MODEL_PROVIDER", "gemma_api")
+        .env("AMOS_MODEL_NAME", "gemma-4-26b-a4b-it")
+        .env(
+            "AMOS_MODEL_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta",
+        )
+        .env("AMOS_MODEL_ROUTE_CLASS", "approved_hosted_api")
+        .env("AMOS_PRIVACY_PROFILE", "air_gapped")
+        .env(
+            "AMOS_ALLOWED_EGRESS_HOSTS",
+            "generativelanguage.googleapis.com",
+        )
+        .env("GEMINI_API_KEY", secret)
+        .env_remove("GEMINI_API_KEY_FILE")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let visible = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(visible.contains("air_gapped"));
+    assert!(!visible.contains(secret));
+    let store = Store::open(root.path().join("data/amos.sqlite")).unwrap();
+    assert!(
+        store
+            .list_model_invocations(seed::TENANT, "any")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -859,7 +1021,7 @@ async fn transactions_artifacts_claims_and_replay_enforce_owner_and_policy_visib
         "/v1/tasks",
         "analyst_001",
         Some(json!({
-            "request":"Why did payment failures increase?",
+            "request":"Why did SMB logo churn increase this week?",
             "idempotency_key":"owner-policy-contract"
         })),
     )
@@ -875,7 +1037,7 @@ async fn transactions_artifacts_claims_and_replay_enforce_owner_and_policy_visib
         "/v1/tasks",
         "analyst_002",
         Some(json!({
-            "request":"Why did payment failures increase?",
+            "request":"Why did SMB logo churn increase this week?",
             "idempotency_key":"owner-policy-contract"
         })),
     )
@@ -997,9 +1159,9 @@ async fn ui_uses_authenticated_identity_and_cannot_be_upgraded_by_form_fields() 
     let (status, body) = request(&app, "GET", "/", "analyst_001", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !String::from_utf8(body)
+        String::from_utf8(body)
             .unwrap()
-            .contains("name=\"identity\"")
+            .contains("Local demo identity")
     );
 
     let (status, _) = request_raw(
@@ -1007,11 +1169,11 @@ async fn ui_uses_authenticated_identity_and_cannot_be_upgraded_by_form_fields() 
         "POST",
         "/ui/tasks",
         Some("Bearer analyst_001"),
-        b"request=Why+did+payment+failures+increase%3F&idempotency_key=ui-identity-test&identity=reviewer_001".to_vec(),
+        b"request=Why+did+SMB+logo+churn+increase%3F&idempotency_key=ui-identity-test&identity=reviewer_001".to_vec(),
         Some("application/x-www-form-urlencoded"),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::SEE_OTHER);
 
     let (status, body) = request(&app, "GET", "/v1/artifacts", "analyst_001", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -1041,6 +1203,269 @@ async fn ui_uses_authenticated_identity_and_cannot_be_upgraded_by_form_fields() 
 }
 
 #[tokio::test]
+async fn demo_identity_switch_uses_an_opaque_server_session_and_is_absent_in_production() {
+    let (_root, app) = app();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/demo/identity")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("identity=reviewer_001"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()["location"], "/");
+    let set_cookie = response.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("amos_demo_session=demo_session_"));
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("SameSite=Strict"));
+    assert!(!set_cookie.contains("reviewer_001"));
+    let cookie = set_cookie.split(';').next().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Signed in as <strong>reviewer_001</strong>"));
+
+    let root = TempDir::new().unwrap();
+    let config = RuntimeConfig::demo(root.path()).unwrap();
+    let store = Store::open(&config.control_db).unwrap();
+    seed::seed_demo(&store, &config.warehouse_db).unwrap();
+    let runtime = AmosRuntime::open_with_model(config, common::test_model()).unwrap();
+    let production = api::router(runtime, Arc::new(StaticIdentityProvider::demo()));
+    let (status, _) = request_raw(
+        &production,
+        "POST",
+        "/demo/identity",
+        None,
+        b"identity=admin".to_vec(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = request_raw(
+        &production,
+        "POST",
+        "/demo/source-change",
+        Some("Bearer admin"),
+        b"artifact_id=artifact&idempotency_key=source".to_vec(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = request(&production, "GET", "/advisor-demo", "analyst_001", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = request_raw(&production, "GET", "/demo/login", None, vec![], None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = request(&production, "GET", "/", "analyst_001", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !String::from_utf8(body)
+            .unwrap()
+            .contains("Local demo identity")
+    );
+}
+
+#[tokio::test]
+async fn subscription_ui_exposes_complete_evidence_and_published_review_without_raw_data() {
+    let (_root, app) = app();
+    let (status, body) = request(
+        &app,
+        "POST",
+        "/v1/tasks",
+        "analyst_001",
+        Some(json!({
+            "request":"Why did SMB logo churn increase this week, and should the executive dashboard attribute it to the pricing email?",
+            "idempotency_key":"m5-filmable-analysis"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run: RunResult = serde_json::from_slice(&body).unwrap();
+
+    let (status, body) = request(
+        &app,
+        "GET",
+        &format!("/analyses/{}", run.artifact.artifact_id),
+        "analyst_001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    for expected in [
+        "Permission-filtered model payload",
+        "AMOS admitted",
+        "Exact read-only SQL",
+        "subscription_events",
+        "Narrow capability issued",
+        "AMOS verification checks",
+        "Open complete claim evidence",
+        "stub:test-gemma",
+        "Protected from the model",
+        "Blocked schema fields",
+        "customer_email",
+        "raw_support_note",
+        "Invocation ID",
+        "Latency",
+        "Tokens",
+        "Manifest / prompt hash",
+        "0 raw warehouse rows",
+    ] {
+        assert!(html.contains(expected), "{expected}");
+    }
+    for forbidden in [seed::WAREHOUSE_RAW_CANARY, seed::RESTRICTED_MEMORY_CANARY] {
+        assert!(!html.contains(forbidden), "{forbidden}");
+    }
+
+    let supported_claim = run
+        .claims
+        .iter()
+        .find(|claim| !claim.support_execution_ids.is_empty())
+        .unwrap();
+    let (status, body) = request(
+        &app,
+        "GET",
+        &format!("/claims/{}", supported_claim.claim_id),
+        "analyst_001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    for expected in [
+        "Query and result",
+        "Direct computational support",
+        "Capability signature and credentials are redacted",
+        "Verified aggregate result",
+        "source version",
+        "Model lineage",
+        "Governed excerpt",
+    ] {
+        assert!(html.contains(expected), "{expected}");
+    }
+
+    let (status, body) = request(&app, "GET", "/reviews", "reviewer_001", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let review_html = String::from_utf8(body).unwrap();
+    assert!(review_html.contains("<b>Question:</b>"));
+    assert!(review_html.contains("evidence records"));
+    assert!(review_html.contains("<b>Freshness:</b>"));
+    assert!(review_html.contains("final day is incomplete"));
+
+    let claim_ids = run
+        .claims
+        .iter()
+        .map(|claim| claim.claim_id.clone())
+        .collect::<Vec<_>>();
+    let (status, body) = request(
+        &app,
+        "POST",
+        &format!("/v1/artifacts/{}/reviews", run.artifact.artifact_id),
+        "reviewer_001",
+        Some(json!({
+            "idempotency_key":"m5-publish",
+            "claim_ids":claim_ids,
+            "decision":"approve",
+            "comment":"The evidence supports publication with the causal caveat intact.",
+            "correction":null,
+            "authority":"reviewer_approved"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let review: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(review["transaction"]["state"], "published");
+    assert_eq!(
+        review["artifact"]["publication_validity"],
+        "valid_at_publication"
+    );
+
+    let (status, body) = request(
+        &app,
+        "GET",
+        &format!("/analyses/{}", run.artifact.artifact_id),
+        "reviewer_001",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    assert!(html.contains("Lifecycle Published"));
+    assert!(html.contains("Publication ValidAtPublication"));
+
+    let (status, body) = request(
+        &app,
+        "GET",
+        &format!("/analyses/{}", run.artifact.artifact_id),
+        "admin",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("Receive updated snapshot")
+    );
+    let (status, _) = request_raw(
+        &app,
+        "POST",
+        "/demo/source-change",
+        Some("Bearer admin"),
+        format!(
+            "artifact_id={}&idempotency_key=m6-api-source-successor",
+            run.artifact.artifact_id
+        )
+        .into_bytes(),
+        Some("application/x-www-form-urlencoded"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, body) = request(
+        &app,
+        "GET",
+        &format!("/analyses/{}", run.artifact.artifact_id),
+        "admin",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    for expected in [
+        "Stale after source change",
+        "Historical SQL, aggregate results, hashes, review, and replay evidence remain immutable",
+        "Durable revalidation jobs",
+        "claim.revalidate",
+        "Outbox records",
+        "invalidation.processed",
+        "source.successor.receive",
+    ] {
+        assert!(html.contains(expected), "{expected}");
+    }
+}
+
+#[tokio::test]
 async fn memory_listing_applies_policy_permissions_before_serialization() {
     let (_root, app) = app();
 
@@ -1050,7 +1475,7 @@ async fn memory_listing_applies_policy_permissions_before_serialization() {
     assert!(
         analyst_memory
             .iter()
-            .all(|object| object["logical_key"] != "analysis:processor_b_retry")
+            .all(|object| object["logical_key"] != "analysis:churn_pipeline_incident")
     );
 
     let (status, body) = request(&app, "GET", "/v1/memory", "admin", None).await;
@@ -1059,6 +1484,85 @@ async fn memory_listing_applies_policy_permissions_before_serialization() {
     assert!(
         admin_memory
             .iter()
-            .any(|object| object["logical_key"] == "analysis:processor_b_retry")
+            .any(|object| object["logical_key"] == "analysis:churn_pipeline_incident")
     );
+}
+
+#[tokio::test]
+async fn admin_can_list_inspect_and_install_analysis_packs() {
+    let (_root, app) = app();
+
+    let (status, _) = request(&app, "GET", "/v1/packs", "analyst_001", None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, body) = request(&app, "GET", "/v1/packs", "admin", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let listed = serde_json::from_slice::<Value>(&body).unwrap();
+    let items = listed["items"].as_array().unwrap();
+    assert!(
+        items
+            .iter()
+            .any(|item| item["pack_id"] == "subscription_churn")
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| item["pack_id"] == "payment_failure_churn")
+    );
+
+    let (status, body) = request(
+        &app,
+        "GET",
+        "/v1/packs/payment_failure_churn",
+        "admin",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let pack = serde_json::from_slice::<Value>(&body).unwrap();
+    assert_eq!(pack["task_type"], "payment_failure_churn_review");
+
+    let (status, body) = request(
+        &app,
+        "POST",
+        "/v1/tasks",
+        "analyst_001",
+        Some(json!({
+            "request":"Why did SMB payment failure churn increase this week?",
+            "task_type":"payment_failure_churn_review",
+            "idempotency_key":"api-payment-failure-pack"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run: RunResult = serde_json::from_slice(&body).unwrap();
+    assert_eq!(run.transaction.task_type, "payment_failure_churn_review");
+
+    let mut reinstall = pack.clone();
+    let (status, body) = request(
+        &app,
+        "POST",
+        "/v1/packs",
+        "admin",
+        Some(json!({ "pack": reinstall })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let installed = serde_json::from_slice::<Value>(&body).unwrap();
+    assert_eq!(installed["newly_installed"], false);
+    assert_eq!(installed["pack_id"], "payment_failure_churn");
+
+    reinstall["version"] = json!(2);
+    let (status, body) = request(
+        &app,
+        "POST",
+        "/v1/packs",
+        "admin",
+        Some(json!({ "pack": reinstall })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let upgraded = serde_json::from_slice::<Value>(&body).unwrap();
+    assert_eq!(upgraded["newly_installed"], true);
+    assert_eq!(upgraded["version"], 2);
 }

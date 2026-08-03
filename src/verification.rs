@@ -13,6 +13,7 @@ use crate::{
         Artifact, Claim, ContextManifest, DependencyEdge, ExecutionRecord, Identity, Outcome,
         PlanStep, TaskDefinition, VerificationCheck, VerificationRecord, content_hash, stable_id,
     },
+    packs::GenericVerifierProfile,
     policy::PolicyEngine,
     workers::ChartWorker,
 };
@@ -73,7 +74,7 @@ impl Verifier {
             &mut checks,
             "TOOL_POLICY",
             self.policy
-                .authorize_tool(identity, definition, &step.tool, &relations)
+                .authorize_tool(identity, definition, manifest, &step.tool, &relations)
                 .map_err(|e| e.to_string()),
             &mut errors,
         );
@@ -146,7 +147,13 @@ impl Verifier {
         );
         let allowed_tables: BTreeSet<_> = schemas
             .iter()
-            .filter_map(|schema| schema.content.get("table").and_then(|value| value.as_str()))
+            .filter_map(|schema| {
+                schema
+                    .content
+                    .get("relation")
+                    .or_else(|| schema.content.get("table"))
+                    .and_then(|value| value.as_str())
+            })
             .map(str::to_lowercase)
             .collect();
         let allowed_columns: BTreeSet<_> = schemas
@@ -185,20 +192,44 @@ impl Verifier {
             unknown_table.map_or(Ok(()), |table| Err(format!("unknown table: {table}"))),
             &mut errors,
         );
-        let payment_events_used = references.relations.contains("payment_events");
+        record(
+            &mut checks,
+            "SQL_RELATION_BINDING",
+            if !references.relations.is_empty() && references.relations.is_subset(&relations) {
+                Ok(())
+            } else {
+                Err("SQL relations are not a subset of the declared relations".into())
+            },
+            &mut errors,
+        );
+        let unbounded_time_field = schemas.iter().find_map(|schema| {
+            let relation = schema
+                .content
+                .get("relation")
+                .or_else(|| schema.content.get("table"))
+                .and_then(|value| value.as_str())?
+                .to_lowercase();
+            if !references.relations.contains(&relation) {
+                return None;
+            }
+            schema
+                .content
+                .get("time_field")
+                .and_then(|value| value.as_str())
+                .map(str::to_lowercase)
+                .filter(|field| {
+                    !references.lower_bound_identifiers.contains(field)
+                        || !references.upper_bound_identifiers.contains(field)
+                })
+        });
         record(
             &mut checks,
             "SQL_TIME_BOUNDS",
-            if !payment_events_used
-                || (references.has_time_lower_bound && references.has_time_upper_bound)
-            {
-                Ok(())
-            } else {
-                Err(
-                    "payment_events queries require parsed lower and upper event_time bounds"
-                        .into(),
-                )
-            },
+            unbounded_time_field.map_or(Ok(()), |field| {
+                Err(format!(
+                    "relation queries require parsed lower and upper {field} bounds"
+                ))
+            }),
             &mut errors,
         );
         let unknown_column =
@@ -233,7 +264,7 @@ impl Verifier {
             .collect();
         let blocked_used = blocked
             .iter()
-            .find(|column| normalized.contains(&normalize(column)));
+            .find(|column| references.identifiers.contains(&column.to_lowercase()));
         record(
             &mut checks,
             "SCHEMA_BLOCKED_COLUMNS",
@@ -341,9 +372,10 @@ impl Verifier {
         Some(repaired)
     }
 
-    pub fn verify_claims(
+    pub fn verify_claims_with_profile(
         &self,
         request: &ClaimVerificationRequest<'_>,
+        generic_profile: &GenericVerifierProfile,
     ) -> Result<VerificationRecord> {
         let tenant = request.tenant;
         let atxn_id = request.atxn_id;
@@ -454,7 +486,7 @@ impl Verifier {
                         support_errors.push(format!("claim {} missing {relation}", claim.claim_id));
                     }
                 }
-                if let Err(error) = verify_numeric_claim(claim, &execution_ids) {
+                if let Err(error) = verify_numeric_claim(claim, &execution_ids, generic_profile) {
                     numeric_errors.push(error);
                 }
             }
@@ -462,7 +494,7 @@ impl Verifier {
                 warnings.push(format!("claim {} requires human review", claim.claim_id));
             }
         }
-        let chart_result = verify_chart_binding(artifact, executions);
+        let chart_result = verify_chart_binding(artifact, executions, generic_profile);
         record(
             &mut checks,
             "CLAIM_REFERENCES",
@@ -547,6 +579,7 @@ fn join_errors(errors: &[String]) -> std::result::Result<(), String> {
 fn verify_numeric_claim(
     claim: &Claim,
     executions: &std::collections::BTreeMap<&str, &ExecutionRecord>,
+    generic_profile: &GenericVerifierProfile,
 ) -> std::result::Result<(), String> {
     let execution = claim
         .support_execution_ids
@@ -560,6 +593,13 @@ fn verify_numeric_claim(
         })?;
     match claim.claim_type.as_str() {
         "metric_comparison" => {
+            let (period_field, current_label, baseline_label, numerator_field, denominator_field) = (
+                generic_profile.rate_comparison.period_field.as_str(),
+                generic_profile.rate_comparison.current_label.as_str(),
+                generic_profile.rate_comparison.baseline_label.as_str(),
+                generic_profile.rate_comparison.numerator_field.as_str(),
+                generic_profile.rate_comparison.denominator_field.as_str(),
+            );
             let rows = execution
                 .output
                 .as_array()
@@ -567,17 +607,24 @@ fn verify_numeric_claim(
             let current = rows
                 .iter()
                 .find(|row| {
-                    row.get("period").and_then(serde_json::Value::as_str) == Some("current")
+                    row.get(period_field).and_then(serde_json::Value::as_str) == Some(current_label)
                 })
                 .ok_or_else(|| format!("claim {} has no current row", claim.claim_id))?;
             let baseline = rows
                 .iter()
                 .find(|row| {
-                    row.get("period").and_then(serde_json::Value::as_str) == Some("baseline")
+                    row.get(period_field).and_then(serde_json::Value::as_str)
+                        == Some(baseline_label)
                 })
                 .ok_or_else(|| format!("claim {} has no baseline row", claim.claim_id))?;
-            let current_rate = recompute_rate(current, &claim.claim_id)?;
-            let baseline_rate = recompute_rate(baseline, &claim.claim_id)?;
+            let current_rate =
+                recompute_rate(current, numerator_field, denominator_field, &claim.claim_id)?;
+            let baseline_rate = recompute_rate(
+                baseline,
+                numerator_field,
+                denominator_field,
+                &claim.claim_id,
+            )?;
             let claimed_current = finite_number(&claim.payload, "current_value", &claim.claim_id)?;
             let claimed_baseline =
                 finite_number(&claim.payload, "baseline_value", &claim.claim_id)?;
@@ -592,13 +639,18 @@ fn verify_numeric_claim(
             Ok(())
         }
         "concentration" => {
+            let (numerator_field, denominator_field, rate_field) = (
+                generic_profile.concentration.numerator_field.as_str(),
+                generic_profile.concentration.denominator_field.as_str(),
+                generic_profile.concentration.rate_field.as_str(),
+            );
             let first = execution
                 .output
                 .as_array()
                 .and_then(|rows| rows.first())
                 .ok_or_else(|| format!("claim {} concentration output is empty", claim.claim_id))?;
-            let rate = recompute_rate(first, &claim.claim_id)?;
-            let reported_rate = finite_number(first, "failure_rate", &claim.claim_id)?;
+            let rate = recompute_rate(first, numerator_field, denominator_field, &claim.claim_id)?;
+            let reported_rate = finite_number(first, rate_field, &claim.claim_id)?;
             if &claim.payload != first || (rate - reported_rate).abs() > 1e-12 {
                 return Err(format!(
                     "claim {} concentration payload does not match the top execution row",
@@ -622,20 +674,25 @@ fn verify_numeric_claim(
     }
 }
 
-fn recompute_rate(row: &serde_json::Value, claim_id: &str) -> std::result::Result<f64, String> {
-    let failures = row
-        .get("failures")
+fn recompute_rate(
+    row: &serde_json::Value,
+    numerator_field: &str,
+    denominator_field: &str,
+    claim_id: &str,
+) -> std::result::Result<f64, String> {
+    let numerator = row
+        .get(numerator_field)
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| format!("claim {claim_id} has no integer failures"))?;
-    let attempts = row
-        .get("attempts")
+        .ok_or_else(|| format!("claim {claim_id} has no integer {numerator_field}"))?;
+    let denominator = row
+        .get(denominator_field)
         .and_then(serde_json::Value::as_u64)
-        .filter(|attempts| *attempts > 0)
-        .ok_or_else(|| format!("claim {claim_id} has no positive integer attempts"))?;
-    if failures > attempts {
-        return Err(format!("claim {claim_id} failures exceed attempts"));
+        .filter(|value| *value > 0)
+        .ok_or_else(|| format!("claim {claim_id} has no positive integer {denominator_field}"))?;
+    if numerator > denominator {
+        return Err(format!("claim {claim_id} numerator exceeds denominator"));
     }
-    Ok(failures as f64 / attempts as f64)
+    Ok(numerator as f64 / denominator as f64)
 }
 
 fn finite_number(
@@ -653,6 +710,7 @@ fn finite_number(
 fn verify_chart_binding(
     artifact: &Artifact,
     executions: &[ExecutionRecord],
+    generic_profile: &GenericVerifierProfile,
 ) -> std::result::Result<(), String> {
     let timeseries = executions
         .iter()
@@ -665,20 +723,22 @@ fn verify_chart_binding(
     let points = rows
         .iter()
         .map(|row| {
-            let hour = row
-                .get("hour")
+            let label_field = generic_profile.timeseries.label_field.as_str();
+            let value_field = generic_profile.timeseries.value_field.as_str();
+            let label = row
+                .get(label_field)
                 .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| "timeseries row has no hour".to_string())?;
+                .ok_or_else(|| format!("timeseries row has no {label_field}"))?;
             let value = row
-                .get("failure_rate")
+                .get(value_field)
                 .and_then(serde_json::Value::as_f64)
                 .filter(|value| value.is_finite())
-                .ok_or_else(|| "timeseries row has no finite failure rate".to_string())?;
-            Ok((hour.to_string(), value))
+                .ok_or_else(|| format!("timeseries row has no finite {value_field}"))?;
+            Ok((label.to_string(), value))
         })
         .collect::<std::result::Result<Vec<_>, String>>()?;
     let (svg, hash) = ChartWorker
-        .timeseries_svg(&points)
+        .timeseries_svg_with_label(&points, &generic_profile.timeseries.accessible_label)
         .map_err(|error| error.to_string())?;
     if !artifact.content.contains(&hash) || !artifact.content.contains(&svg) {
         return Err("artifact chart is not bound to the timeseries execution data".into());
@@ -727,8 +787,8 @@ struct SchemaReferences {
     has_set_operation: bool,
     has_subquery: bool,
     query_count: usize,
-    has_time_lower_bound: bool,
-    has_time_upper_bound: bool,
+    lower_bound_identifiers: BTreeSet<String>,
+    upper_bound_identifiers: BTreeSet<String>,
 }
 
 impl Visitor for SchemaReferences {
@@ -767,18 +827,18 @@ impl Visitor for SchemaReferences {
                 self.has_subquery = true;
             }
             Expr::BinaryOp { left, op, right } => {
-                let left_is_time = expression_identifier(left).as_deref() == Some("event_time");
-                let right_is_time = expression_identifier(right).as_deref() == Some("event_time");
-                if left_is_time {
-                    self.has_time_lower_bound |=
-                        matches!(op, BinaryOperator::Gt | BinaryOperator::GtEq);
-                    self.has_time_upper_bound |=
-                        matches!(op, BinaryOperator::Lt | BinaryOperator::LtEq);
-                } else if right_is_time {
-                    self.has_time_lower_bound |=
-                        matches!(op, BinaryOperator::Lt | BinaryOperator::LtEq);
-                    self.has_time_upper_bound |=
-                        matches!(op, BinaryOperator::Gt | BinaryOperator::GtEq);
+                if let Some(identifier) = expression_identifier(left) {
+                    if matches!(op, BinaryOperator::Gt | BinaryOperator::GtEq) {
+                        self.lower_bound_identifiers.insert(identifier);
+                    } else if matches!(op, BinaryOperator::Lt | BinaryOperator::LtEq) {
+                        self.upper_bound_identifiers.insert(identifier);
+                    }
+                } else if let Some(identifier) = expression_identifier(right) {
+                    if matches!(op, BinaryOperator::Lt | BinaryOperator::LtEq) {
+                        self.lower_bound_identifiers.insert(identifier);
+                    } else if matches!(op, BinaryOperator::Gt | BinaryOperator::GtEq) {
+                        self.upper_bound_identifiers.insert(identifier);
+                    }
                 }
             }
             _ => {}
@@ -805,6 +865,27 @@ fn expression_identifier(expression: &Expr) -> Option<String> {
             .map(|identifier| identifier.value.to_lowercase()),
         _ => None,
     }
+}
+
+pub(crate) fn sql_relation_references(sql: &str) -> Result<BTreeSet<String>> {
+    let statements = Parser::parse_sql(&GenericDialect {}, sql)
+        .map_err(|_| crate::AmosError::Validation("SQL parse failed".into()))?;
+    if statements.len() != 1
+        || !statements
+            .first()
+            .is_some_and(|statement| matches!(statement, sqlparser::ast::Statement::Query(_)))
+    {
+        return Err(crate::AmosError::Validation(
+            "only one read-only SELECT is allowed".into(),
+        ));
+    }
+    let mut references = SchemaReferences::default();
+    if statements.visit(&mut references).is_break() {
+        return Err(crate::AmosError::Validation(
+            "SQL reference traversal failed".into(),
+        ));
+    }
+    Ok(references.relations)
 }
 
 #[cfg(test)]

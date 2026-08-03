@@ -10,33 +10,45 @@ use std::{
 };
 
 use chrono::{Duration, Utc};
+use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
 use crate::{
     Result,
+    artifacts::{
+        VerifiedFactCatalog, build_fact_catalog, compile_artifact, validate_narrative_plan,
+    },
     connectors::{Connector, Page, SqliteWarehouseConnector},
     context::ContextCompiler,
     domain::{
         AnalyticalTransaction, Artifact, AtxnState, AuditEvent, Authority, Claim, ContextManifest,
-        DependencyEdge, EdgeEndpoint, ErasureReceipt, ExecutionRecord, Identity, Job, Outcome,
-        PlanStep, PolicyVisibility, PublicationValidity, ReplayAvailability, ReplayComparisonKind,
+        DependencyEdge, ErasureReceipt, ExecutionRecord, Identity, Job, MemoryObject, MemoryType,
+        OutboxEvent, Outcome, PlanStep, ReplayAvailability, ReplayComparisonKind,
         ReplayExecutionComparison, ReplayPackage, ReplayResult, RetentionCommand, RetentionRecord,
-        Review, ReviewDecision, ReviewResult, ReviewState, RiskClass, RunResult, SemanticValidity,
-        SqlPreflight, SupersessionState, TaskDefinition, TypedPlan, VerificationRecord,
-        content_hash, new_id, stable_id,
+        Review, ReviewDecision, ReviewResult, ReviewState, RunResult, SemanticValidity,
+        SqlPreflight, TaskDefinition, TypedPlan, VerificationRecord, content_hash, new_id,
+        stable_id,
     },
     error::AmosError,
     evidence::EvidenceService,
     memory::MemoryService,
+    model::{
+        AnalysisKind, ModelDescriptor, ModelGenerationConfig, ModelInvocationStatus, ModelInvoker,
+        ModelProvider, ModelPurpose, ModelRequestTemplate, NarrativePlan, PlanProposal,
+        UnavailableModelProvider, narrative_response_schema_for_evidence,
+        plan_response_schema_for_relation,
+    },
     observability::{MetricsSnapshot, OperationalMetrics},
+    packs::AnalysisPack,
     policy::PolicyEngine,
+    privacy::PrivacyBoundaryConfig,
     publication::{LocalFilesystemObjectStore, ObjectStore},
     scheduler::Scheduler,
-    seed::{SOURCE, SPIKE_START, TENANT, WINDOW_END, WINDOW_START},
+    seed::TENANT,
     store::Store,
     verification::{ClaimVerificationRequest, Verifier},
-    workers::{CapabilityIssuer, ChartWorker, SqlWorker, StatisticsWorker},
+    workers::{CapabilityIssuer, SqlWorker},
 };
 
 #[derive(Clone)]
@@ -44,6 +56,10 @@ pub struct RuntimeConfig {
     pub control_db: PathBuf,
     pub warehouse_db: PathBuf,
     pub object_root: PathBuf,
+    pub privacy: PrivacyBoundaryConfig,
+    pub analysis_pack: AnalysisPack,
+    pub model_max_attempts: u32,
+    pub model_temperature: f32,
     capability_key: Vec<u8>,
 }
 
@@ -54,6 +70,10 @@ impl fmt::Debug for RuntimeConfig {
             .field("control_db", &self.control_db)
             .field("warehouse_db", &self.warehouse_db)
             .field("object_root", &self.object_root)
+            .field("privacy", &self.privacy)
+            .field("analysis_pack", &self.analysis_pack.pack_id)
+            .field("model_max_attempts", &self.model_max_attempts)
+            .field("model_temperature", &self.model_temperature)
             .field("capability_key", &"[REDACTED]")
             .finish()
     }
@@ -64,27 +84,40 @@ impl RuntimeConfig {
         control_db: impl Into<PathBuf>,
         warehouse_db: impl Into<PathBuf>,
         capability_key: impl Into<Vec<u8>>,
-    ) -> Self {
+        analysis_pack: AnalysisPack,
+    ) -> Result<Self> {
+        analysis_pack.validate()?;
         let control_db = control_db.into();
         let warehouse_db = warehouse_db.into();
         let object_root = control_db
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("objects");
-        Self {
+        Ok(Self {
             control_db,
             warehouse_db,
             object_root,
+            privacy: PrivacyBoundaryConfig::local_air_gapped(),
+            analysis_pack,
+            model_max_attempts: 2,
+            model_temperature: 0.1,
             capability_key: capability_key.into(),
-        }
+        })
     }
 
-    pub fn demo(root: impl AsRef<Path>) -> Self {
+    pub fn demo(root: impl AsRef<Path>) -> Result<Self> {
         Self::new(
             root.as_ref().join("data/amos.sqlite"),
-            root.as_ref().join("data/payments.sqlite"),
+            root.as_ref().join("data/warehouse.sqlite"),
             b"amos-explicit-demo-capability-key-v1".to_vec(),
+            AnalysisPack::subscription_churn()?,
         )
+    }
+
+    pub fn with_analysis_pack(mut self, analysis_pack: AnalysisPack) -> Result<Self> {
+        analysis_pack.validate()?;
+        self.analysis_pack = analysis_pack;
+        Ok(self)
     }
 }
 
@@ -100,11 +133,13 @@ pub struct AmosRuntime {
     connector: Arc<dyn Connector>,
     sql_worker: SqlWorker,
     capability_issuer: CapabilityIssuer,
-    statistics: StatisticsWorker,
-    charts: ChartWorker,
     blocking_permits: Arc<Semaphore>,
     metrics: Arc<OperationalMetrics>,
     object_store: LocalFilesystemObjectStore,
+    analysis_pack: Arc<AnalysisPack>,
+    privacy: PrivacyBoundaryConfig,
+    model_generation: ModelGenerationConfig,
+    model: ModelInvoker,
 }
 
 struct PreparedEvidence {
@@ -118,6 +153,50 @@ struct PreparedEvidence {
 enum ResumeOutcome {
     Completed(Box<RunResult>),
     Paused(Box<AnalyticalTransaction>),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DemoSourceChangeResult {
+    pub superseded_memory_id: String,
+    pub successor_memory_id: String,
+    pub previous_source_version: String,
+    pub current_source_version: String,
+    pub affected_artifact_ids: Vec<String>,
+    pub affected_claim_ids: Vec<String>,
+    pub jobs: Vec<Job>,
+    pub outbox: Vec<OutboxEvent>,
+    pub audit: Vec<AuditEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaimEvidenceView {
+    pub claim: Claim,
+    pub dependencies: Vec<DependencyEdge>,
+    pub transaction: AnalyticalTransaction,
+    pub artifact: Artifact,
+    pub manifest: ContextManifest,
+    pub plan: TypedPlan,
+    pub executions: Vec<ExecutionRecord>,
+    pub verifications: Vec<VerificationRecord>,
+    pub governed_objects: Vec<MemoryObject>,
+    pub model_invocations: Vec<ModelInvocationEvidence>,
+    pub audit: Vec<AuditEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelInvocationEvidence {
+    pub invocation_id: String,
+    pub purpose: ModelPurpose,
+    pub provider: String,
+    pub model: String,
+    pub route_class: crate::privacy::ModelRouteClass,
+    pub input_manifest_hash: String,
+    pub input_payload_hash: String,
+    pub output_hash: Option<String>,
+    pub latency_ms: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub status: ModelInvocationStatus,
 }
 
 impl ResumeOutcome {
@@ -134,21 +213,61 @@ impl ResumeOutcome {
 
 impl AmosRuntime {
     pub fn open(config: RuntimeConfig) -> Result<Self> {
+        Self::open_with_model(
+            config,
+            Arc::new(UnavailableModelProvider::new(
+                "no model provider was configured",
+            )),
+        )
+    }
+
+    pub fn open_with_model(
+        config: RuntimeConfig,
+        model_provider: Arc<dyn ModelProvider>,
+    ) -> Result<Self> {
+        config.privacy.validate()?;
+        if !config.model_temperature.is_finite() || !(0.0..=2.0).contains(&config.model_temperature)
+        {
+            return Err(AmosError::Validation(
+                "model temperature must be finite and between zero and two".into(),
+            ));
+        }
         let store = Store::open(&config.control_db)?;
+        let privacy = config.privacy.clone();
         let policy = PolicyEngine;
         let memory = MemoryService::new(store.clone(), policy.clone());
         let scheduler = Scheduler::new(store.clone());
         let evidence = EvidenceService::new(store.clone(), policy.clone());
         let context = ContextCompiler::new(memory.clone());
         let issuer = CapabilityIssuer::new(config.capability_key)?;
+        let (primary_relation, primary_source) = {
+            let (relation, source) = config.analysis_pack.primary_relation()?;
+            (relation.to_string(), source.to_string())
+        };
+        let connector_permissions = config
+            .analysis_pack
+            .schemas
+            .iter()
+            .find(|schema| schema.relation == primary_relation)
+            .map(|schema| schema.permission_labels.clone())
+            .ok_or_else(|| {
+                AmosError::Validation("analysis pack primary schema is missing".into())
+            })?;
         let connector = Arc::new(SqliteWarehouseConnector::new(
             TENANT,
-            SOURCE,
+            primary_source,
             &config.warehouse_db,
             issuer.clone(),
+            connector_permissions,
         ));
         let sql_worker = SqlWorker::new(&config.warehouse_db, issuer.clone());
         let object_store = LocalFilesystemObjectStore::new(&config.object_root)?;
+        let model = ModelInvoker::new(model_provider, store.clone(), config.model_max_attempts)?;
+        let analysis_pack = Arc::new(config.analysis_pack);
+        let model_generation = ModelGenerationConfig {
+            temperature: config.model_temperature,
+            max_output_tokens: 2_048,
+        };
         Ok(Self {
             store,
             memory,
@@ -160,16 +279,119 @@ impl AmosRuntime {
             connector,
             sql_worker,
             capability_issuer: issuer,
-            statistics: StatisticsWorker,
-            charts: ChartWorker,
             blocking_permits: Arc::new(Semaphore::new(8)),
             metrics: Arc::new(OperationalMetrics::default()),
             object_store,
+            analysis_pack,
+            privacy,
+            model_generation,
+            model,
         })
     }
 
     pub fn metrics(&self) -> MetricsSnapshot {
         self.metrics.snapshot()
+    }
+
+    pub fn privacy_boundary(&self) -> Result<crate::privacy::PrivacyBoundaryView> {
+        self.privacy.view()
+    }
+
+    pub fn model_descriptor(&self) -> ModelDescriptor {
+        self.model.descriptor()
+    }
+
+    pub fn model_compatibility_probe_passed(&self) -> Result<bool> {
+        self.store.model_compatibility_probe_passed(TENANT)
+    }
+
+    pub fn default_analysis_pack(&self) -> &AnalysisPack {
+        &self.analysis_pack
+    }
+
+    pub fn pack_for_task(
+        &self,
+        tenant: &str,
+        task_type: &str,
+        version: Option<u32>,
+    ) -> Result<Arc<AnalysisPack>> {
+        let installed = match version {
+            Some(version) => self
+                .store
+                .get_analysis_pack_by_task_type_version(tenant, task_type, version)?,
+            None => self
+                .store
+                .get_analysis_pack_by_task_type(tenant, task_type)?,
+        };
+        if let Some(pack) = installed {
+            return Ok(Arc::new(pack));
+        }
+        if self.analysis_pack.task_type == task_type
+            && version.is_none_or(|value| value == self.analysis_pack.version)
+        {
+            return Ok(self.analysis_pack.clone());
+        }
+        Err(AmosError::NotFound(format!(
+            "analysis pack for task type {task_type}"
+        )))
+    }
+
+    pub fn install_pack(
+        &self,
+        identity: &Identity,
+        pack: AnalysisPack,
+    ) -> Result<(bool, AnalysisPack)> {
+        self.policy.authorize_operations(identity)?;
+        pack.validate()?;
+        let installed = self.store.install_analysis_pack(
+            &identity.tenant_id,
+            &pack,
+            &identity.subject_id,
+            Utc::now(),
+        )?;
+        self.store.append_audit(&AuditEvent {
+            event_id: new_id("audit"),
+            tenant_id: identity.tenant_id.clone(),
+            actor_id: identity.subject_id.clone(),
+            action: "pack.install".into(),
+            target_type: "analysis_pack".into(),
+            target_id: format!("{}:v{}", pack.pack_id, pack.version),
+            request_id: None,
+            atxn_id: None,
+            outcome: if installed { "created" } else { "idempotent" }.into(),
+            policy_epoch: identity.policy_epoch,
+            details: json!({
+                "pack_id": pack.pack_id,
+                "task_type": pack.task_type,
+                "version": pack.version,
+                "newly_installed": installed,
+            }),
+            created_at: Utc::now(),
+        })?;
+        Ok((installed, pack))
+    }
+
+    pub fn list_installed_packs(
+        &self,
+        identity: &Identity,
+    ) -> Result<Vec<crate::store::AnalysisPackRecord>> {
+        self.store.list_analysis_packs(&identity.tenant_id)
+    }
+
+    pub fn get_installed_pack(&self, identity: &Identity, pack_id: &str) -> Result<AnalysisPack> {
+        self.store
+            .get_analysis_pack(&identity.tenant_id, pack_id)?
+            .ok_or_else(|| AmosError::NotFound(format!("analysis pack {pack_id}")))
+    }
+
+    pub fn blocked_analysis_fields(&self) -> Vec<String> {
+        self.analysis_pack
+            .schemas
+            .iter()
+            .flat_map(|schema| schema.blocked_columns.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub(crate) async fn execute_blocking<T, F>(&self, operation: F) -> Result<T>
@@ -336,6 +558,108 @@ impl AmosRuntime {
         Ok((claim, dependencies))
     }
 
+    pub fn claim_evidence_view(
+        &self,
+        identity: &Identity,
+        claim_id: &str,
+    ) -> Result<ClaimEvidenceView> {
+        let (claim, dependencies) = self.get_claim_for(identity, claim_id)?;
+        let artifact = self
+            .store
+            .get_artifact(&identity.tenant_id, &claim.artifact_id)?
+            .ok_or_else(|| AmosError::NotFound(claim.artifact_id.clone()))?;
+        let transaction = self.get_transaction_for(identity, &artifact.atxn_id)?;
+        let manifest = self
+            .store
+            .get_manifest_by_atxn(&identity.tenant_id, &artifact.atxn_id)?
+            .ok_or_else(|| AmosError::NotFound("claim context manifest".into()))?;
+        let plan = self
+            .store
+            .get_plan_by_atxn(&identity.tenant_id, &artifact.atxn_id)?
+            .ok_or_else(|| AmosError::NotFound("claim typed plan".into()))?;
+        let executions = self
+            .store
+            .list_executions(&identity.tenant_id, &artifact.atxn_id)?
+            .into_iter()
+            .filter(|execution| {
+                claim
+                    .support_execution_ids
+                    .contains(&execution.execution_id)
+            })
+            .collect::<Vec<_>>();
+        let verifications = self
+            .store
+            .list_verifications(&identity.tenant_id, &artifact.atxn_id)?
+            .into_iter()
+            .filter(|verification| {
+                claim
+                    .verification_ids
+                    .contains(&verification.verification_id)
+            })
+            .collect::<Vec<_>>();
+        let governed_ids = dependencies
+            .iter()
+            .filter(|edge| edge.to.endpoint_type == "memory")
+            .map(|edge| edge.to.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let governed_objects = manifest
+            .selected_objects
+            .iter()
+            .filter(|object| governed_ids.contains(object.object_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let model_invocations = self
+            .store
+            .list_model_invocations(&identity.tenant_id, &artifact.atxn_id)?
+            .into_iter()
+            .map(|invocation| ModelInvocationEvidence {
+                invocation_id: invocation.invocation_id,
+                purpose: invocation.purpose,
+                provider: invocation.provider,
+                model: invocation.model,
+                route_class: invocation.route_class,
+                input_manifest_hash: invocation.input_manifest_hash,
+                input_payload_hash: invocation.input_payload_hash,
+                output_hash: invocation.output_hash,
+                latency_ms: invocation.latency_ms,
+                input_tokens: invocation.input_tokens,
+                output_tokens: invocation.output_tokens,
+                status: invocation.status,
+            })
+            .collect();
+        let audit = self
+            .store
+            .list_audit(&identity.tenant_id, 500)?
+            .into_iter()
+            .filter(|event| {
+                event.target_id == claim.claim_id
+                    || event.target_id == artifact.artifact_id
+                    || event.atxn_id.as_deref() == Some(artifact.atxn_id.as_str())
+                    || event
+                        .details
+                        .get("affected_claim_ids")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ids| {
+                            ids.iter()
+                                .any(|id| id.as_str() == Some(claim.claim_id.as_str()))
+                        })
+            })
+            .collect();
+        Ok(ClaimEvidenceView {
+            claim,
+            dependencies,
+            transaction,
+            artifact,
+            manifest,
+            plan,
+            executions,
+            verifications,
+            governed_objects,
+            model_invocations,
+            audit,
+        })
+    }
+
     pub fn authorize_operations(&self, identity: &Identity) -> Result<()> {
         self.policy.authorize_operations(identity)
     }
@@ -387,6 +711,17 @@ impl AmosRuntime {
         request: String,
         idempotency_key: String,
     ) -> Result<RunResult> {
+        self.run_task_typed(identity, request, None, idempotency_key)
+            .await
+    }
+
+    pub async fn run_task_typed(
+        &self,
+        identity: &Identity,
+        request: String,
+        task_type: Option<String>,
+        idempotency_key: String,
+    ) -> Result<RunResult> {
         self.metrics.task_started();
         let started = Instant::now();
         let permit = self
@@ -403,7 +738,7 @@ impl AmosRuntime {
                 .enable_all()
                 .build()
                 .map_err(|error| AmosError::Storage(error.to_string()))?
-                .block_on(runtime.run_task_inner(&identity, request, idempotency_key))
+                .block_on(runtime.run_task_inner(&identity, request, task_type, idempotency_key))
         })
         .await
         .map_err(|error| AmosError::Storage(format!("task worker join failed: {error}")))?;
@@ -418,12 +753,15 @@ impl AmosRuntime {
         &self,
         identity: &Identity,
         request: String,
+        task_type: Option<String>,
         idempotency_key: String,
     ) -> Result<RunResult> {
+        let task_type = task_type.unwrap_or_else(|| self.analysis_pack.task_type.clone());
+        let pack = self.pack_for_task(&identity.tenant_id, &task_type, None)?;
         let definition = self
             .store
-            .get_task_definition(&identity.tenant_id, "payment_health_review")?
-            .ok_or_else(|| AmosError::NotFound("payment_health_review task definition".into()))?;
+            .get_task_definition(&identity.tenant_id, &pack.task_type)?
+            .ok_or_else(|| AmosError::NotFound(format!("{} task definition", pack.task_type)))?;
         self.policy.authorize_task(identity, &definition)?;
         let request_hash = content_hash(
             &json!({"request":request,"task":definition.task_type,"version":definition.version}),
@@ -452,203 +790,22 @@ impl AmosRuntime {
             created_at: now,
             updated_at: now,
         };
-        let mut atxn = self.store.create_transaction(&initial)?;
+        let atxn = self.store.create_transaction(&initial)?;
         if atxn.atxn_id != initial.atxn_id {
             self.policy.authorize_transaction_read(identity, &atxn)?;
-            return match atxn.state {
-                AtxnState::Published | AtxnState::NeedsReview => {
-                    self.load_result(&identity.tenant_id, &atxn.atxn_id)
-                }
-                AtxnState::Rejected | AtxnState::Aborted | AtxnState::Revoked => Err(
-                    AmosError::Conflict("idempotent transaction ended without evidence".into()),
-                ),
-                _ => self
-                    .resume_task_inner(identity, atxn, None)
-                    .await?
-                    .into_result(),
-            };
         }
-        atxn = self.advance(&atxn, AtxnState::Observing, None)?;
-        let observation = self.connector.observe("table:payment_events").await?;
-        atxn.source_versions.insert(
-            format!("{}:payment_events", observation.source_id),
-            observation.source_version.clone(),
-        );
-        atxn.updated_at = Utc::now();
-        self.store.checkpoint_transaction(&atxn)?;
-        atxn = self.advance(&atxn, AtxnState::Selecting, None)?;
-        let manifest = self.context.compile(
-            identity,
-            &atxn.atxn_id,
-            &request,
-            &definition,
-            parse_time(WINDOW_START)?,
-            parse_time(WINDOW_END)?,
-        )?;
-        if !manifest.conflicts.is_empty() {
-            let _ = self.advance(&atxn, AtxnState::NeedsReview, Some(Outcome::NeedsReview))?;
-            return Err(AmosError::Conflict(
-                "context has equal-authority conflicts".into(),
-            ));
-        }
-        self.store.save_manifest(&manifest)?;
-        atxn = self.advance(&atxn, AtxnState::Planning, None)?;
-        let mut plan = self.build_plan(&atxn, &manifest)?;
-        let mut verifications = vec![];
-        for index in 0..plan.steps.len() {
-            let mut repairs = 0;
-            loop {
-                let verification = self.verifier.verify_step(
-                    identity,
-                    &definition,
-                    &manifest,
-                    &plan.steps[index],
-                )?;
-                self.store.save_verification(&verification)?;
-                verifications.push(verification.clone());
-                if verification.outcome != Outcome::Repair {
-                    if verification.outcome == Outcome::Reject {
-                        let _ = self.advance(&atxn, AtxnState::Rejected, Some(Outcome::Reject))?;
-                        return Err(AmosError::Validation(verification.errors.join("; ")));
-                    }
-                    break;
-                }
-                if repairs >= definition.budgets.max_repairs {
-                    let _ =
-                        self.advance(&atxn, AtxnState::NeedsReview, Some(Outcome::NeedsReview))?;
-                    return Err(AmosError::Validation("repair budget exhausted".into()));
-                }
-                let repair = verification
-                    .permitted_repair
-                    .as_deref()
-                    .and_then(|repair| self.verifier.repair_step(&plan.steps[index], repair))
-                    .ok_or_else(|| AmosError::Validation("permitted repair is invalid".into()))?;
-                plan.steps[index] = repair;
-                repairs += 1;
+        match atxn.state {
+            AtxnState::Published | AtxnState::NeedsReview => {
+                self.load_result(&identity.tenant_id, &atxn.atxn_id)
             }
+            AtxnState::Rejected | AtxnState::Aborted | AtxnState::Revoked => Err(
+                AmosError::Conflict("idempotent transaction ended without evidence".into()),
+            ),
+            _ => self
+                .resume_task_inner(identity, atxn, None)
+                .await?
+                .into_result(),
         }
-        self.store.save_plan(&plan)?;
-        atxn = self.advance(&atxn, AtxnState::Executing, None)?;
-        let fence = atxn.state_seq;
-        let mut executions = vec![];
-        for step in &plan.steps {
-            let capability = self.capability_issuer.issue(identity, &plan, step, fence)?;
-            let execution = self
-                .sql_worker
-                .execute(identity, &plan, step, &capability, fence)?;
-            let execution = self.store.save_execution(&execution)?;
-            executions.push(execution);
-        }
-        atxn = self.advance(&atxn, AtxnState::Composing, None)?;
-        let (artifact, mut claims, edges) = self.compose(&atxn, &manifest, &executions)?;
-        for claim in claims.iter_mut().filter(|claim| {
-            matches!(
-                claim.claim_type.as_str(),
-                "metric_value" | "metric_comparison" | "concentration"
-            )
-        }) {
-            for execution_id in &claim.support_execution_ids {
-                let execution = executions
-                    .iter()
-                    .find(|execution| &execution.execution_id == execution_id)
-                    .ok_or_else(|| AmosError::NotFound(execution_id.clone()))?;
-                let step = plan
-                    .steps
-                    .iter()
-                    .find(|step| step.step_id == execution.step_id)
-                    .ok_or_else(|| AmosError::NotFound(execution.step_id.clone()))?;
-                let step_hash = content_hash(step)?;
-                claim.verification_ids.extend(
-                    verifications
-                        .iter()
-                        .filter(|verification| verification.input_hash == step_hash)
-                        .map(|verification| verification.verification_id.clone()),
-                );
-            }
-            claim.verification_ids.sort();
-            claim.verification_ids.dedup();
-        }
-        atxn = self.advance(&atxn, AtxnState::Verifying, None)?;
-        let claim_verification = self.verifier.verify_claims(&ClaimVerificationRequest {
-            tenant: &identity.tenant_id,
-            atxn_id: &atxn.atxn_id,
-            profile: &definition.verifier_profile,
-            artifact: &artifact,
-            manifest: &manifest,
-            claims: &claims,
-            edges: &edges,
-            executions: &executions,
-            verifications: &verifications,
-        })?;
-        self.store.save_verification(&claim_verification)?;
-        if claim_verification.outcome == Outcome::Reject {
-            let _ = self.advance(&atxn, AtxnState::Rejected, Some(Outcome::Reject))?;
-            return Err(AmosError::Validation(claim_verification.errors.join("; ")));
-        }
-        verifications.push(claim_verification.clone());
-        atxn = self.advance(&atxn, AtxnState::Revalidating, None)?;
-        let validation = self
-            .connector
-            .validate("table:payment_events", &observation.source_version)
-            .await?;
-        if !validation.same {
-            let _ = self.advance(&atxn, AtxnState::NeedsReview, Some(Outcome::NeedsReview))?;
-            return Err(AmosError::Conflict(
-                "warehouse schema changed before commit".into(),
-            ));
-        }
-        if atxn.policy_epoch != identity.policy_epoch {
-            return Err(AmosError::Conflict(
-                "policy epoch changed before commit".into(),
-            ));
-        }
-        let package = self.replay_package(&artifact, &manifest, &plan, &executions)?;
-        let audit = AuditEvent {
-            event_id: stable_id("audit", &(&atxn.atxn_id, "evidence.commit"))?,
-            tenant_id: identity.tenant_id.clone(),
-            actor_id: identity.subject_id.clone(),
-            action: "evidence.commit".into(),
-            target_type: "artifact".into(),
-            target_id: artifact.artifact_id.clone(),
-            request_id: Some(atxn.request_id.clone()),
-            atxn_id: Some(atxn.atxn_id.clone()),
-            outcome: "pass".into(),
-            policy_epoch: identity.policy_epoch,
-            details: json!({"claim_count":claims.len(),"replay_level":package.replay_level}),
-            created_at: atxn.created_at,
-        };
-        atxn = self
-            .store
-            .commit_evidence(&atxn, &artifact, &claims, &edges, &package, &audit)?;
-        let review_required = claim_verification.outcome == Outcome::NeedsReview
-            || definition.publication_policy == "human_review_required";
-        atxn = if review_required {
-            self.advance(&atxn, AtxnState::NeedsReview, Some(Outcome::NeedsReview))?
-        } else {
-            let atxn = self.advance(&atxn, AtxnState::ObjectFinalizing, None)?;
-            self.finalize_object(&atxn)?;
-            let atxn = self.advance(&atxn, AtxnState::PublicationPending, None)?;
-            self.advance(
-                &atxn,
-                AtxnState::Published,
-                Some(if atxn.warnings.is_empty() {
-                    Outcome::Pass
-                } else {
-                    Outcome::Warning
-                }),
-            )?
-        };
-        Ok(RunResult {
-            transaction: atxn,
-            manifest,
-            plan,
-            executions,
-            verifications,
-            artifact,
-            claims,
-            dependencies: edges,
-            replay_package: package,
-        })
     }
 
     pub async fn recover_task(&self, identity: &Identity, atxn_id: String) -> Result<RunResult> {
@@ -742,6 +899,11 @@ impl AmosRuntime {
                 ))
             })?;
         self.policy.authorize_task(identity, &definition)?;
+        let pack = self.pack_for_task(
+            &identity.tenant_id,
+            &atxn.task_type,
+            Some(atxn.task_version),
+        )?;
         let mut prepared = None;
         loop {
             if stop_before == Some(atxn.state) {
@@ -752,13 +914,14 @@ impl AmosRuntime {
                     atxn = self.advance(&atxn, AtxnState::Observing, None)?;
                 }
                 AtxnState::Observing => {
-                    if !atxn
-                        .source_versions
-                        .contains_key(&format!("{SOURCE}:payment_events"))
-                    {
-                        let observation = self.connector.observe("table:payment_events").await?;
+                    let (relation, source) = pack.primary_relation()?;
+                    let relation = relation.to_string();
+                    let source_key = format!("{source}:{relation}");
+                    if !atxn.source_versions.contains_key(&source_key) {
+                        let observation =
+                            self.connector.observe(&format!("table:{relation}")).await?;
                         atxn.source_versions.insert(
-                            format!("{}:payment_events", observation.source_id),
+                            format!("{}:{relation}", observation.source_id),
                             observation.source_version,
                         );
                         atxn.updated_at = Utc::now();
@@ -778,8 +941,8 @@ impl AmosRuntime {
                                 &atxn.atxn_id,
                                 &atxn.request,
                                 &definition,
-                                parse_time(WINDOW_START)?,
-                                parse_time(WINDOW_END)?,
+                                pack.start()?,
+                                pack.end()?,
                             )?;
                             if !manifest.conflicts.is_empty() {
                                 let _ = self.advance(
@@ -812,7 +975,25 @@ impl AmosRuntime {
                         .get_plan_by_atxn(&identity.tenant_id, &atxn.atxn_id)?
                         .is_none()
                     {
-                        let mut plan = self.build_plan(&atxn, &manifest)?;
+                        let mut plan = match self
+                            .propose_plan(identity, &atxn, &definition, &manifest, &pack)
+                            .await
+                        {
+                            Ok(plan) => plan,
+                            Err(error) => {
+                                self.append_model_failure_audit(
+                                    identity,
+                                    &atxn,
+                                    ModelPurpose::Plan,
+                                )?;
+                                let _ = self.advance(
+                                    &atxn,
+                                    AtxnState::Rejected,
+                                    Some(Outcome::Reject),
+                                )?;
+                                return Err(error);
+                            }
+                        };
                         for index in 0..plan.steps.len() {
                             let mut repairs = 0;
                             loop {
@@ -823,6 +1004,7 @@ impl AmosRuntime {
                                     &plan.steps[index],
                                 )?;
                                 self.store.save_verification(&verification)?;
+                                self.append_verification_audit(identity, &atxn, &verification)?;
                                 if verification.outcome != Outcome::Repair {
                                     if verification.outcome == Outcome::Reject {
                                         let _ = self.advance(
@@ -860,6 +1042,16 @@ impl AmosRuntime {
                         }
                         self.store.save_plan(&plan)?;
                     }
+                    let admitted_plan = self.recovery_plan(&atxn)?;
+                    self.append_plan_admission_audit(identity, &atxn, &admitted_plan)?;
+                    for verification in self
+                        .store
+                        .list_verifications(&identity.tenant_id, &atxn.atxn_id)?
+                        .iter()
+                        .filter(|verification| verification.profile_version == 1)
+                    {
+                        self.append_verification_audit(identity, &atxn, verification)?;
+                    }
                     atxn = self.advance(&atxn, AtxnState::Executing, None)?;
                 }
                 AtxnState::Repairing => {
@@ -880,25 +1072,70 @@ impl AmosRuntime {
                         let capability =
                             self.capability_issuer
                                 .issue(identity, &plan, step, atxn.state_seq)?;
-                        let execution = self.sql_worker.execute(
+                        let mut execution = self.sql_worker.execute(
                             identity,
                             &plan,
                             step,
                             &capability,
                             atxn.state_seq,
                         )?;
+                        execution.input_versions = atxn.source_versions.clone();
                         self.store.save_execution(&execution)?;
+                    }
+                    for execution in self.recovery_executions(&identity.tenant_id, &atxn)? {
+                        self.append_execution_audit(identity, &atxn, &execution)?;
                     }
                     atxn = self.advance(&atxn, AtxnState::Composing, None)?;
                 }
                 AtxnState::Composing => {
                     let manifest = self.recovery_manifest(&atxn)?;
                     let executions = self.recovery_executions(&identity.tenant_id, &atxn)?;
-                    self.compose(&atxn, &manifest, &executions)?;
+                    let plan = self.recovery_plan(&atxn)?;
+                    let verifications = self
+                        .store
+                        .list_verifications(&identity.tenant_id, &atxn.atxn_id)?;
+                    let catalog = build_fact_catalog(
+                        &atxn,
+                        &manifest,
+                        &plan,
+                        &executions,
+                        &verifications,
+                        &pack,
+                    )?;
+                    self.store.save_verified_fact_catalog(&catalog)?;
                     atxn = self.advance(&atxn, AtxnState::Verifying, None)?;
                 }
                 AtxnState::Verifying => {
-                    let candidate = self.prepare_evidence(identity, &atxn, &definition)?;
+                    let candidate = match self
+                        .prepare_evidence(identity, &atxn, &definition, &pack)
+                        .await
+                    {
+                        Ok(candidate) => candidate,
+                        Err(error)
+                            if matches!(
+                                &error,
+                                AmosError::ModelUnavailable(_)
+                                    | AmosError::ModelTimeout
+                                    | AmosError::ModelOutputInvalid(_)
+                            ) =>
+                        {
+                            self.append_model_failure_audit(
+                                identity,
+                                &atxn,
+                                ModelPurpose::Narrative,
+                            )?;
+                            let _ =
+                                self.advance(&atxn, AtxnState::Rejected, Some(Outcome::Reject))?;
+                            return Err(error);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    for verification in self
+                        .store
+                        .list_verifications(&identity.tenant_id, &atxn.atxn_id)?
+                    {
+                        self.append_verification_audit(identity, &atxn, &verification)?;
+                    }
                     if candidate.claim_verification.outcome == Outcome::Reject {
                         let _ = self.advance(&atxn, AtxnState::Rejected, Some(Outcome::Reject))?;
                         return Err(AmosError::Validation(
@@ -909,23 +1146,21 @@ impl AmosRuntime {
                     prepared = Some(candidate);
                 }
                 AtxnState::Revalidating => {
+                    let (relation, source) = pack.primary_relation()?;
+                    let source_key = format!("{source}:{relation}");
+                    let relation_subject = format!("table:{relation}");
                     if self
                         .store
                         .get_artifact_by_atxn(&identity.tenant_id, &atxn.atxn_id)?
                         .is_some()
                     {
-                        let observed = atxn
-                            .source_versions
-                            .get(&format!("{SOURCE}:payment_events"))
-                            .ok_or_else(|| {
-                                AmosError::Validation(
-                                    "review recovery has no source observation".into(),
-                                )
-                            })?;
-                        let validation = self
-                            .connector
-                            .validate("table:payment_events", observed)
-                            .await?;
+                        let observed = atxn.source_versions.get(&source_key).ok_or_else(|| {
+                            AmosError::Validation(
+                                "review recovery has no source observation".into(),
+                            )
+                        })?;
+                        let validation =
+                            self.connector.validate(&relation_subject, observed).await?;
                         if !validation.same || atxn.policy_epoch != identity.policy_epoch {
                             return Err(AmosError::Conflict(
                                 "governing state changed before review recovery".into(),
@@ -936,20 +1171,17 @@ impl AmosRuntime {
                     }
                     let candidate = match prepared.take() {
                         Some(candidate) => candidate,
-                        None => self.prepare_evidence(identity, &atxn, &definition)?,
+                        None => {
+                            self.prepare_evidence(identity, &atxn, &definition, &pack)
+                                .await?
+                        }
                     };
-                    let observed = atxn
-                        .source_versions
-                        .get(&format!("{SOURCE}:payment_events"))
-                        .ok_or_else(|| {
-                            AmosError::Validation(
-                                "recovery checkpoint has no source observation".into(),
-                            )
-                        })?;
-                    let validation = self
-                        .connector
-                        .validate("table:payment_events", observed)
-                        .await?;
+                    let observed = atxn.source_versions.get(&source_key).ok_or_else(|| {
+                        AmosError::Validation(
+                            "recovery checkpoint has no source observation".into(),
+                        )
+                    })?;
+                    let validation = self.connector.validate(&relation_subject, observed).await?;
                     if !validation.same {
                         let _ = self.advance(
                             &atxn,
@@ -970,6 +1202,7 @@ impl AmosRuntime {
                         &self.recovery_manifest(&atxn)?,
                         &self.recovery_plan(&atxn)?,
                         &candidate.executions,
+                        &pack,
                     )?;
                     atxn = self.store.commit_evidence(
                         &atxn,
@@ -1116,11 +1349,12 @@ impl AmosRuntime {
             .ok_or_else(|| AmosError::NotFound("recovery plan".into()))
     }
 
-    fn prepare_evidence(
+    async fn prepare_evidence(
         &self,
         identity: &Identity,
         atxn: &AnalyticalTransaction,
         definition: &TaskDefinition,
+        pack: &AnalysisPack,
     ) -> Result<PreparedEvidence> {
         let manifest = self.recovery_manifest(atxn)?;
         let plan = self.recovery_plan(atxn)?;
@@ -1134,13 +1368,37 @@ impl AmosRuntime {
                 "recovery cannot compose until every plan step has an execution".into(),
             ));
         }
-        let (artifact, mut claims, edges) = self.compose(atxn, &manifest, &executions)?;
         let mut verifications = self
             .store
             .list_verifications(&identity.tenant_id, &atxn.atxn_id)?
             .into_iter()
             .filter(|verification| verification.profile_version == 1)
             .collect::<Vec<_>>();
+        let catalog = match self
+            .store
+            .get_verified_fact_catalog(&identity.tenant_id, &atxn.atxn_id)?
+        {
+            Some(catalog) => catalog,
+            None => self.store.save_verified_fact_catalog(&build_fact_catalog(
+                atxn,
+                &manifest,
+                &plan,
+                &executions,
+                &verifications,
+                pack,
+            )?)?,
+        };
+        let narrative = self
+            .generate_narrative(identity, atxn, &manifest, &catalog, pack)
+            .await?;
+        let (artifact, mut claims, edges) = compile_artifact(
+            atxn,
+            &manifest,
+            &catalog,
+            &narrative,
+            pack,
+            &plan.model_identity,
+        )?;
         for claim in claims.iter_mut().filter(|claim| {
             matches!(
                 claim.claim_type.as_str(),
@@ -1168,7 +1426,7 @@ impl AmosRuntime {
             claim.verification_ids.sort();
             claim.verification_ids.dedup();
         }
-        let claim_verification = self.verifier.verify_claims(&ClaimVerificationRequest {
+        let claim_request = ClaimVerificationRequest {
             tenant: &identity.tenant_id,
             atxn_id: &atxn.atxn_id,
             profile: &definition.verifier_profile,
@@ -1178,7 +1436,10 @@ impl AmosRuntime {
             edges: &edges,
             executions: &executions,
             verifications: &verifications,
-        })?;
+        };
+        let claim_verification = self
+            .verifier
+            .verify_claims_with_profile(&claim_request, &pack.verifier_profile)?;
         self.store.save_verification(&claim_verification)?;
         verifications.push(claim_verification.clone());
         Ok(PreparedEvidence {
@@ -1455,10 +1716,22 @@ impl AmosRuntime {
         request: &str,
         sql: String,
     ) -> Result<SqlPreflight> {
+        self.preflight_sql_for_task(identity, request, sql, None)
+    }
+
+    pub fn preflight_sql_for_task(
+        &self,
+        identity: &Identity,
+        request: &str,
+        sql: String,
+        task_type: Option<&str>,
+    ) -> Result<SqlPreflight> {
+        let task_type = task_type.unwrap_or(self.analysis_pack.task_type.as_str());
+        let pack = self.pack_for_task(&identity.tenant_id, task_type, None)?;
         let definition = self
             .store
-            .get_task_definition(&identity.tenant_id, "payment_health_review")?
-            .ok_or_else(|| AmosError::NotFound("payment_health_review task definition".into()))?;
+            .get_task_definition(&identity.tenant_id, &pack.task_type)?
+            .ok_or_else(|| AmosError::NotFound(format!("{} task definition", pack.task_type)))?;
         self.policy.authorize_task(identity, &definition)?;
         let atxn_id = new_id("preflight");
         let manifest = self.context.compile(
@@ -1466,21 +1739,37 @@ impl AmosRuntime {
             &atxn_id,
             request,
             &definition,
-            parse_time(WINDOW_START)?,
-            parse_time(WINDOW_END)?,
+            pack.start()?,
+            pack.end()?,
         )?;
         if !manifest.conflicts.is_empty() {
             return Err(AmosError::Conflict(
                 "context has equal-authority conflicts".into(),
             ));
         }
-        let proposed = step(
-            "preflight",
-            "preflight proposed SQL",
-            sql,
-            "proposed.v1",
-            &manifest,
-        );
+        let (relation, source_id) = pack.primary_relation()?;
+        let proposed = PlanStep {
+            step_id: "preflight".into(),
+            purpose: "preflight proposed SQL".into(),
+            tool: "sql.readonly.v1".into(),
+            source_id: source_id.into(),
+            input_object_ids: manifest
+                .selected_objects
+                .iter()
+                .map(|object| object.object_id.clone())
+                .collect(),
+            parameter_schema: "amos.sql-query.v1".into(),
+            parameters: json!({"sql":sql,"relations":[relation]}),
+            expected_output_schema: "preflight".into(),
+            limits: crate::domain::OperationLimits {
+                seconds: definition.budgets.max_seconds,
+                rows: definition.budgets.max_rows,
+                bytes: definition.budgets.max_bytes,
+            },
+            max_attempts: 1,
+            repair_classes: BTreeSet::new(),
+            verifier_profile: definition.verifier_profile.clone(),
+        };
         let verification =
             self.verifier
                 .verify_step(identity, &definition, &manifest, &proposed)?;
@@ -1652,13 +1941,19 @@ impl AmosRuntime {
                 )
             })
         {
+            let pack = self.pack_for_task(
+                &identity.tenant_id,
+                &atxn.task_type,
+                Some(atxn.task_version),
+            )?;
+            let (relation, source) = pack.primary_relation()?;
             let observed = atxn
                 .source_versions
-                .get(&format!("{SOURCE}:payment_events"))
+                .get(&format!("{source}:{relation}"))
                 .ok_or_else(|| AmosError::Validation("missing source observation".into()))?;
             let validation = self
                 .connector
-                .validate("table:payment_events", observed)
+                .validate(&format!("table:{relation}"), observed)
                 .await?;
             if !validation.same || atxn.policy_epoch != identity.policy_epoch {
                 return Err(AmosError::Conflict(
@@ -1904,6 +2199,210 @@ impl AmosRuntime {
         Ok(())
     }
 
+    pub fn trigger_demo_source_change(
+        &self,
+        identity: &Identity,
+        idempotency_key: &str,
+    ) -> Result<DemoSourceChangeResult> {
+        self.policy.authorize_operations(identity)?;
+        if idempotency_key.trim().is_empty() || idempotency_key.len() > 160 {
+            return Err(AmosError::Validation(
+                "the governed source change requires a bounded idempotency key".into(),
+            ));
+        }
+        let (primary_relation, primary_source) = {
+            let (relation, source) = self.analysis_pack.primary_relation()?;
+            (relation.to_string(), source.to_string())
+        };
+        let current_source_version = stable_id(
+            "snapshot_successor",
+            &(identity.tenant_id.as_str(), idempotency_key),
+        )?;
+        let active_memory = self.store.list_active_memory(&identity.tenant_id)?;
+        let active_snapshot = active_memory
+            .into_iter()
+            .find(|object| {
+                object.source_id == primary_source
+                    && object
+                        .content
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .is_some_and(|role| role == "data_snapshot")
+                    && object
+                        .content
+                        .get("relation")
+                        .and_then(Value::as_str)
+                        .is_some_and(|relation| relation == primary_relation)
+            })
+            .ok_or_else(|| AmosError::NotFound("active governed data snapshot".into()))?;
+        let (superseded_memory_id, successor) = if active_snapshot.source_version
+            == current_source_version
+        {
+            let superseded_memory_id =
+                active_snapshot.supersedes.last().cloned().ok_or_else(|| {
+                    AmosError::Conflict(
+                        "idempotent demo source successor lacks its predecessor".into(),
+                    )
+                })?;
+            (superseded_memory_id, active_snapshot)
+        } else {
+            let superseded_memory_id = active_snapshot.object_id.clone();
+            let mut successor = active_snapshot;
+            successor.object_id = new_id("mem");
+            successor.source_version = current_source_version.clone();
+            successor.summary = format!(
+                "Successor {primary_relation} snapshot received; dependent historical claims require revalidation."
+            );
+            successor.recorded_at = Utc::now();
+            successor.supersedes = vec![superseded_memory_id.clone()];
+            successor.superseded_by = None;
+            successor.status = crate::domain::MemoryStatus::Active;
+            successor.provenance_ref =
+                Some(format!("demo-source-successor/{current_source_version}"));
+            let content = successor.content.as_object_mut().ok_or_else(|| {
+                AmosError::Validation("governed snapshot content must be an object".into())
+            })?;
+            content.insert(
+                "snapshot_id".into(),
+                json!(format!("{primary_relation}_{current_source_version}")),
+            );
+            content.insert(
+                "watermark".into(),
+                json!(self.analysis_pack.time_window.end),
+            );
+            content.insert(
+                "freshness_warning".into(),
+                json!("a governed successor snapshot was received after publication"),
+            );
+            successor.content_hash = content_hash(&successor.content)?;
+            let successor = self
+                .memory
+                .supersede(identity, &superseded_memory_id, successor)?;
+            (superseded_memory_id, successor)
+        };
+        let invalidation_key = format!("demo-source-change/{idempotency_key}");
+        let affected_claim_ids = self.evidence.invalidate_memory_with_key(
+            &identity.tenant_id,
+            &superseded_memory_id,
+            "source_successor_received",
+            &invalidation_key,
+        )?;
+        let shutdown = AtomicBool::new(false);
+        self.process_job_batch(
+            &identity.tenant_id,
+            "demo-source-change-worker",
+            30,
+            250,
+            &shutdown,
+        )?;
+        let affected_claim_set = affected_claim_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let affected_artifact_ids = affected_claim_ids
+            .iter()
+            .map(|claim_id| {
+                self.store
+                    .get_claim(&identity.tenant_id, claim_id)?
+                    .map(|claim| claim.artifact_id)
+                    .ok_or_else(|| AmosError::NotFound(claim_id.clone()))
+            })
+            .collect::<Result<BTreeSet<_>>>()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        let jobs = self
+            .store
+            .list_jobs(&identity.tenant_id, 250)?
+            .into_iter()
+            .filter(|job| {
+                job.payload.get("invalidation_key").and_then(Value::as_str)
+                    == Some(invalidation_key.as_str())
+            })
+            .collect::<Vec<_>>();
+        let job_ids = jobs
+            .iter()
+            .map(|job| job.job_id.clone())
+            .collect::<BTreeSet<_>>();
+        let outbox = self
+            .store
+            .list_outbox(&identity.tenant_id, 500)?
+            .into_iter()
+            .filter(|event| {
+                event.idempotency_key.contains(&invalidation_key)
+                    || affected_claim_set.contains(&event.aggregate_id)
+                        && event.event_type == "claim.validity_changed"
+            })
+            .collect::<Vec<_>>();
+        let source_audit_id = stable_id(
+            "audit_source_change",
+            &(identity.tenant_id.as_str(), idempotency_key),
+        )?;
+        if !self
+            .store
+            .has_audit_event(&identity.tenant_id, &source_audit_id)?
+        {
+            self.store.append_audit(&AuditEvent {
+                event_id: source_audit_id,
+                tenant_id: identity.tenant_id.clone(),
+                actor_id: identity.subject_id.clone(),
+                action: "source.successor.receive".into(),
+                target_type: "memory".into(),
+                target_id: successor.object_id.clone(),
+                request_id: None,
+                atxn_id: None,
+                outcome: "warning".into(),
+                policy_epoch: identity.policy_epoch,
+                details: json!({
+                    "superseded_memory_id":superseded_memory_id,
+                    "successor_memory_id":successor.object_id,
+                    "previous_source_version":self.store
+                        .get_memory(&identity.tenant_id, &superseded_memory_id)?
+                        .map(|object|object.source_version),
+                    "current_source_version":current_source_version,
+                    "affected_artifact_ids":affected_artifact_ids,
+                    "affected_claim_ids":affected_claim_ids,
+                    "invalidation_key":invalidation_key,
+                }),
+                created_at: Utc::now(),
+            })?;
+        }
+        let audit = self
+            .store
+            .list_audit(&identity.tenant_id, 250)?
+            .into_iter()
+            .filter(|event| {
+                event
+                    .details
+                    .get("invalidation_key")
+                    .and_then(Value::as_str)
+                    == Some(invalidation_key.as_str())
+                    || event
+                        .details
+                        .get("root_invalidation_key")
+                        .and_then(Value::as_str)
+                        == Some(invalidation_key.as_str())
+                    || event
+                        .details
+                        .get("job_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|job_id| job_ids.contains(job_id))
+            })
+            .collect::<Vec<_>>();
+        let previous_source_version = self
+            .store
+            .get_memory(&identity.tenant_id, &superseded_memory_id)?
+            .map(|object| object.source_version)
+            .ok_or_else(|| AmosError::NotFound(superseded_memory_id.clone()))?;
+        Ok(DemoSourceChangeResult {
+            superseded_memory_id,
+            successor_memory_id: successor.object_id,
+            previous_source_version,
+            current_source_version,
+            affected_artifact_ids,
+            affected_claim_ids,
+            jobs,
+            outbox,
+            audit,
+        })
+    }
+
     pub async fn process_source_events(
         &self,
         identity: &Identity,
@@ -1958,232 +2457,609 @@ impl AmosRuntime {
             outcome,
         )
     }
-    fn build_plan(
+
+    fn append_model_failure_audit(
+        &self,
+        identity: &Identity,
+        atxn: &AnalyticalTransaction,
+        purpose: ModelPurpose,
+    ) -> Result<()> {
+        let invocation = self
+            .store
+            .list_model_invocations(&identity.tenant_id, &atxn.atxn_id)?
+            .into_iter()
+            .filter(|invocation| invocation.purpose == purpose)
+            .max_by_key(|invocation| invocation.attempt)
+            .ok_or_else(|| {
+                AmosError::Storage("failed model call has no immutable invocation record".into())
+            })?;
+        let action = match purpose {
+            ModelPurpose::Plan => "model.plan",
+            ModelPurpose::Narrative => "model.narrative",
+        };
+        self.store.append_audit(&AuditEvent {
+            event_id: stable_id("audit", &(&atxn.atxn_id, action))?,
+            tenant_id: identity.tenant_id.clone(),
+            actor_id: format!("model:{}", invocation.model),
+            action: action.into(),
+            target_type: "model_invocation".into(),
+            target_id: invocation.invocation_id.clone(),
+            request_id: Some(atxn.request_id.clone()),
+            atxn_id: Some(atxn.atxn_id.clone()),
+            outcome: match invocation.status {
+                crate::model::ModelInvocationStatus::Pass => "pass",
+                crate::model::ModelInvocationStatus::Invalid => "invalid",
+                crate::model::ModelInvocationStatus::Timeout => "timeout",
+                crate::model::ModelInvocationStatus::ProviderError => "provider_error",
+            }
+            .into(),
+            policy_epoch: identity.policy_epoch,
+            details: json!({
+                "provider": invocation.provider,
+                "model": invocation.model,
+                "route_class": invocation.route_class,
+                "attempt": invocation.attempt,
+                "input_payload_hash": invocation.input_payload_hash,
+                "output_hash": invocation.output_hash,
+                "error_code": invocation.error_code,
+            }),
+            created_at: invocation.created_at,
+        })
+    }
+
+    fn append_plan_admission_audit(
+        &self,
+        identity: &Identity,
+        atxn: &AnalyticalTransaction,
+        plan: &TypedPlan,
+    ) -> Result<()> {
+        let relations = plan
+            .steps
+            .iter()
+            .flat_map(|step| {
+                step.parameters
+                    .get("relations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+            })
+            .collect::<BTreeSet<_>>();
+        self.store.append_audit(&AuditEvent {
+            event_id: stable_id("audit", &(&atxn.atxn_id, "plan.admit"))?,
+            tenant_id: identity.tenant_id.clone(),
+            actor_id: "amos:plan-admission".into(),
+            action: "plan.admit".into(),
+            target_type: "plan".into(),
+            target_id: plan.plan_id.clone(),
+            request_id: Some(atxn.request_id.clone()),
+            atxn_id: Some(atxn.atxn_id.clone()),
+            outcome: "pass".into(),
+            policy_epoch: identity.policy_epoch,
+            details: json!({
+                "plan_hash": content_hash(plan)?,
+                "step_count": plan.steps.len(),
+                "relations": relations,
+                "model_identity": plan.model_identity,
+            }),
+            created_at: atxn.created_at,
+        })
+    }
+
+    fn append_execution_audit(
+        &self,
+        identity: &Identity,
+        atxn: &AnalyticalTransaction,
+        execution: &ExecutionRecord,
+    ) -> Result<()> {
+        self.store.append_audit(&AuditEvent {
+            event_id: stable_id(
+                "audit",
+                &(&atxn.atxn_id, "execution.commit", &execution.execution_id),
+            )?,
+            tenant_id: identity.tenant_id.clone(),
+            actor_id: "amos:sql-worker".into(),
+            action: "execution.commit".into(),
+            target_type: "execution".into(),
+            target_id: execution.execution_id.clone(),
+            request_id: Some(atxn.request_id.clone()),
+            atxn_id: Some(atxn.atxn_id.clone()),
+            outcome: execution.status.clone(),
+            policy_epoch: identity.policy_epoch,
+            details: json!({
+                "step_id": execution.step_id,
+                "tool": execution.tool,
+                "input_versions": execution.input_versions,
+                "output_hash": execution.output_hash,
+                "row_count": execution.row_count,
+                "byte_count": execution.byte_count,
+                "latency_ms": execution.latency_ms,
+                "fencing_token": execution.fencing_token,
+            }),
+            created_at: execution.created_at,
+        })
+    }
+
+    fn append_verification_audit(
+        &self,
+        identity: &Identity,
+        atxn: &AnalyticalTransaction,
+        verification: &VerificationRecord,
+    ) -> Result<()> {
+        self.store.append_audit(&AuditEvent {
+            event_id: stable_id(
+                "audit",
+                &(
+                    &atxn.atxn_id,
+                    "verification.complete",
+                    &verification.verification_id,
+                ),
+            )?,
+            tenant_id: identity.tenant_id.clone(),
+            actor_id: "amos:verifier".into(),
+            action: "verification.complete".into(),
+            target_type: "verification".into(),
+            target_id: verification.verification_id.clone(),
+            request_id: Some(atxn.request_id.clone()),
+            atxn_id: Some(atxn.atxn_id.clone()),
+            outcome: format!("{:?}", verification.outcome).to_ascii_lowercase(),
+            policy_epoch: identity.policy_epoch,
+            details: json!({
+                "profile": verification.verifier_profile,
+                "profile_version": verification.profile_version,
+                "execution_id": verification.execution_id,
+                "input_hash": verification.input_hash,
+                "rule_ids": verification
+                    .checks
+                    .iter()
+                    .map(|check| check.rule_id.as_str())
+                    .collect::<Vec<_>>(),
+                "warning_count": verification.warnings.len(),
+                "error_count": verification.errors.len(),
+            }),
+            created_at: verification.created_at,
+        })
+    }
+
+    async fn propose_plan(
+        &self,
+        identity: &Identity,
+        atxn: &AnalyticalTransaction,
+        definition: &TaskDefinition,
+        manifest: &ContextManifest,
+        pack: &AnalysisPack,
+    ) -> Result<TypedPlan> {
+        let blocked_columns = pack
+            .schemas
+            .iter()
+            .flat_map(|schema| schema.blocked_columns.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let planning_objects = manifest
+            .selected_objects
+            .iter()
+            .filter(|object| {
+                matches!(
+                    object.memory_type,
+                    MemoryType::SemanticDefinition
+                        | MemoryType::Schema
+                        | MemoryType::DataState
+                        | MemoryType::StreamState
+                )
+            })
+            .collect::<Vec<_>>();
+        let selected_model_object_ids = planning_objects
+            .iter()
+            .map(|object| object.object_id.clone())
+            .collect::<Vec<_>>();
+        let governed_objects = planning_objects
+            .into_iter()
+            .map(|object| {
+                json!({
+                    "object_id": object.object_id,
+                    "logical_key": object.logical_key,
+                    "memory_type": object.memory_type,
+                    "summary": object.summary,
+                    "content": sanitize_model_value(&object.content, &blocked_columns),
+                    "source_id": object.source_id,
+                    "source_version": object.source_version,
+                    "authority": object.authority,
+                    "sensitivity": object.sensitivity,
+                })
+            })
+            .collect::<Vec<_>>();
+        let (primary_relation, _) = pack.primary_relation()?;
+        let primary_schema = pack
+            .schemas
+            .iter()
+            .find(|schema| schema.relation == primary_relation)
+            .ok_or_else(|| {
+                AmosError::Validation("analysis pack primary schema is missing".into())
+            })?;
+        let query_bound = |value: &str| {
+            if primary_schema.time_field.ends_with("_date") {
+                value.split('T').next().unwrap_or(value).to_string()
+            } else {
+                value.to_string()
+            }
+        };
+        let window_start = query_bound(&pack.time_window.start);
+        let current_start = query_bound(&pack.time_window.current_start);
+        let window_end = query_bound(&pack.time_window.end);
+        let all_window_bounds = json!({
+            "lower": format!("{} >= '{}'", primary_schema.time_field, &window_start),
+            "upper": format!("{} < '{}'", primary_schema.time_field, &window_end),
+        });
+        let current_window_bounds = json!({
+            "lower": format!("{} >= '{}'", primary_schema.time_field, &current_start),
+            "upper": format!("{} < '{}'", primary_schema.time_field, &window_end),
+        });
+        let payload = json!({
+            "planner_instructions": [
+                "Return exactly one concise SQLite SELECT for each required analysis kind.",
+                "Use every supplied time predicate and required metric filter verbatim as AND clauses.",
+                "Use only declared relations, columns, result aliases, and literal predicates.",
+                "Never repeat fragments or add prose, comments, undeclared predicates, or placeholder identifiers inside SQL.",
+            ],
+            "question": atxn.request,
+            "task": {
+                "task_type": definition.task_type,
+                "version": definition.version,
+                "risk_class": definition.risk_class,
+                "allowed_tools": definition.allowed_tools,
+                "budgets": definition.budgets,
+            },
+            "time_window": pack.time_window,
+            "selected_governed_objects": governed_objects,
+            "required_analysis_kinds": pack.required_analysis_kinds,
+            "result_schemas": pack.result_schemas,
+            "sql_contract": {
+                "dialect": "sqlite",
+                "relation": primary_relation,
+                "time_field": primary_schema.time_field,
+                "required_time_bounds": {
+                    "rate_comparison": all_window_bounds,
+                    "timeseries": all_window_bounds,
+                    "concentration": current_window_bounds,
+                },
+                "required_metric_filters": pack.metric_required_filters,
+                "required_result_semantics": {
+                    "rate_comparison": {
+                        "current_period_label": pack
+                            .verifier_profile
+                            .rate_comparison
+                            .current_label,
+                        "baseline_period_label": pack
+                            .verifier_profile
+                            .rate_comparison
+                            .baseline_label,
+                        "query_shape": format!(
+                            "one SELECT using CASE WHEN {} >= '{}' THEN current ELSE baseline END AS {}; GROUP BY {}",
+                            primary_schema.time_field,
+                            &current_start,
+                            pack
+                                .verifier_profile
+                                .rate_comparison
+                                .period_field,
+                            pack
+                                .verifier_profile
+                                .rate_comparison
+                                .period_field,
+                        ),
+                    },
+                    "concentration": {
+                        "order_by": format!(
+                            "{} DESC",
+                            pack.verifier_profile.concentration.numerator_field
+                        ),
+                        "limit": 10,
+                    },
+                    "timeseries": {
+                        "order_by": pack
+                            .verifier_profile
+                            .timeseries
+                            .label_field,
+                    },
+                },
+                "forbidden_sql_forms": [
+                    "BETWEEN",
+                    "inclusive upper bounds using <=",
+                    "GROUP BY column ordinals",
+                    "multiple statements",
+                    "UNION, INTERSECT, or EXCEPT set operations",
+                    "comments",
+                    "undeclared identifiers",
+                ],
+            },
+        });
+        let output = self
+            .model
+            .generate_validated(
+                ModelRequestTemplate {
+                    tenant_id: atxn.tenant_id.clone(),
+                    atxn_id: atxn.atxn_id.clone(),
+                    purpose: ModelPurpose::Plan,
+                    prompt_template_version: "amos.plan.prompt.v2".into(),
+                    input_manifest_hash: content_hash(manifest)?,
+                    payload,
+                    response_schema: plan_response_schema_for_relation(primary_relation),
+                    selected_object_ids: selected_model_object_ids,
+                    verified_execution_ids: vec![],
+                    generation_config: self.model_generation.clone(),
+                },
+                |proposal: &PlanProposal| {
+                    validate_proposal_against_pack(proposal, pack, definition.budgets.max_steps)
+                },
+            )
+            .await?;
+        let plan = self.map_plan_proposal(
+            atxn,
+            definition,
+            manifest,
+            &output.value,
+            &output.invocation,
+            pack,
+        )?;
+        self.store.append_audit(&AuditEvent {
+            event_id: stable_id("audit", &(&atxn.atxn_id, "model.plan"))?,
+            tenant_id: atxn.tenant_id.clone(),
+            actor_id: format!("model:{}", output.invocation.model),
+            action: "model.plan".into(),
+            target_type: "model_invocation".into(),
+            target_id: output.invocation.invocation_id.clone(),
+            request_id: Some(atxn.request_id.clone()),
+            atxn_id: Some(atxn.atxn_id.clone()),
+            outcome: "pass".into(),
+            policy_epoch: identity.policy_epoch,
+            details: json!({
+                "provider": output.invocation.provider,
+                "model": output.invocation.model,
+                "route_class": output.invocation.route_class,
+                "input_payload_hash": output.invocation.input_payload_hash,
+                "output_hash": output.invocation.output_hash,
+                "selected_object_count": output.invocation.selected_object_ids.len(),
+            }),
+            created_at: output.invocation.created_at,
+        })?;
+        Ok(plan)
+    }
+
+    fn map_plan_proposal(
         &self,
         atxn: &AnalyticalTransaction,
+        definition: &TaskDefinition,
         manifest: &ContextManifest,
+        proposal: &PlanProposal,
+        invocation: &crate::model::ModelInvocation,
+        pack: &AnalysisPack,
     ) -> Result<TypedPlan> {
-        let base = "event_time >= '2026-07-07T08:00:00Z' AND event_time < '2026-07-07T20:00:00Z' AND environment = 'production' AND is_test_account = 0";
-        let current = "event_time >= '2026-07-07T14:00:00Z' AND event_time < '2026-07-07T20:00:00Z' AND environment = 'production' AND is_test_account = 0";
-        let steps = vec![
-            step(
-                "summary",
-                "compute current and baseline failure rates",
-                format!(
-                    "SELECT CASE WHEN event_time >= '{SPIKE_START}' THEN 'current' ELSE 'baseline' END AS period, SUM(CASE WHEN status='failure' THEN 1 ELSE 0 END) AS failures, COUNT(*) AS attempts, CAST(SUM(CASE WHEN status='failure' THEN 1 ELSE 0 END) AS REAL)/COUNT(*) AS failure_rate FROM payment_events WHERE {base} GROUP BY period ORDER BY period"
-                ),
-                "rate_comparison.v1",
-                manifest,
-            ),
-            step(
-                "concentration",
-                "identify the largest processor and network contributor",
-                format!(
-                    "SELECT processor, card_network, SUM(CASE WHEN status='failure' THEN 1 ELSE 0 END) AS failures, COUNT(*) AS attempts, CAST(SUM(CASE WHEN status='failure' THEN 1 ELSE 0 END) AS REAL)/COUNT(*) AS failure_rate FROM payment_events WHERE {current} GROUP BY processor,card_network ORDER BY failures DESC LIMIT 10"
-                ),
-                "concentration.v1",
-                manifest,
-            ),
-            step(
-                "timeseries",
-                "compute event-time hourly trend",
-                format!(
-                    "SELECT substr(event_time,1,13)||':00:00Z' AS hour, CAST(SUM(CASE WHEN status='failure' THEN 1 ELSE 0 END) AS REAL)/COUNT(*) AS failure_rate FROM payment_events WHERE {base} GROUP BY hour ORDER BY hour"
-                ),
-                "timeseries.v1",
-                manifest,
-            ),
-        ];
+        let input_object_ids = manifest
+            .selected_objects
+            .iter()
+            .map(|object| object.object_id.clone())
+            .collect::<Vec<_>>();
+        let mut steps = Vec::with_capacity(proposal.steps.len());
+        for proposed in &proposal.steps {
+            let step_id = match proposed.analysis_kind {
+                AnalysisKind::RateComparison => "summary",
+                AnalysisKind::Concentration => "concentration",
+                AnalysisKind::Timeseries => "timeseries",
+            };
+            let sources = proposed
+                .relations
+                .iter()
+                .map(|relation| {
+                    pack.source_relations.get(relation).cloned().ok_or_else(|| {
+                        AmosError::Validation(format!(
+                            "model proposed undeclared relation {relation}"
+                        ))
+                    })
+                })
+                .collect::<Result<BTreeSet<_>>>()?;
+            if sources.len() != 1 {
+                return Err(AmosError::Validation(
+                    "one plan step cannot span multiple governed sources".into(),
+                ));
+            }
+            let source_id = sources
+                .into_iter()
+                .next()
+                .ok_or_else(|| AmosError::Validation("plan step has no source".into()))?;
+            steps.push(PlanStep {
+                step_id: step_id.into(),
+                purpose: proposed.purpose.clone(),
+                tool: "sql.readonly.v1".into(),
+                source_id,
+                input_object_ids: input_object_ids.clone(),
+                parameter_schema: "amos.sql-query.v1".into(),
+                parameters: json!({
+                    "sql": proposed.sql,
+                    "relations": proposed.relations,
+                }),
+                expected_output_schema: serde_json::to_string(&proposed.expected_columns)?,
+                limits: crate::domain::OperationLimits {
+                    seconds: definition.budgets.max_seconds,
+                    rows: definition.budgets.max_rows,
+                    bytes: definition.budgets.max_bytes,
+                },
+                max_attempts: definition.budgets.max_repairs.saturating_add(1),
+                repair_classes: if definition.budgets.max_repairs > 0 {
+                    BTreeSet::from(["COLUMN_SUPERSEDED".into()])
+                } else {
+                    BTreeSet::new()
+                },
+                verifier_profile: definition.verifier_profile.clone(),
+            });
+        }
         Ok(TypedPlan {
             plan_id: stable_id(
                 "plan",
-                &(&atxn.tenant_id, &atxn.atxn_id, "payment_health:v1"),
+                &(
+                    &atxn.tenant_id,
+                    &atxn.atxn_id,
+                    &invocation.invocation_id,
+                    proposal,
+                ),
             )?,
             tenant_id: atxn.tenant_id.clone(),
             atxn_id: atxn.atxn_id.clone(),
             task_definition: manifest.task_definition.clone(),
             manifest_id: manifest.manifest_id.clone(),
-            model_identity: "deterministic-alpha-planner:v1".into(),
+            model_identity: format!("{}:{}", invocation.provider, invocation.model),
             steps,
         })
     }
 
-    fn compose(
+    async fn generate_narrative(
         &self,
+        identity: &Identity,
         atxn: &AnalyticalTransaction,
         manifest: &ContextManifest,
-        executions: &[ExecutionRecord],
-    ) -> Result<(Artifact, Vec<Claim>, Vec<DependencyEdge>)> {
-        let summary = find_execution(executions, "summary")?;
-        let rows = summary
-            .output
-            .as_array()
-            .ok_or_else(|| AmosError::Execution("summary output is not rows".into()))?;
-        let current = rows
+        catalog: &VerifiedFactCatalog,
+        pack: &AnalysisPack,
+    ) -> Result<NarrativePlan> {
+        let narrative_objects = manifest
+            .selected_objects
             .iter()
-            .find(|r| r.get("period").and_then(|v| v.as_str()) == Some("current"))
-            .ok_or_else(|| AmosError::Execution("current period missing".into()))?;
-        let baseline = rows
-            .iter()
-            .find(|r| r.get("period").and_then(|v| v.as_str()) == Some("baseline"))
-            .ok_or_else(|| AmosError::Execution("baseline period missing".into()))?;
-        let comparison = self.statistics.rate_comparison(
-            required_u64(current, "failures", "current summary")?,
-            required_u64(current, "attempts", "current summary")?,
-            required_u64(baseline, "failures", "baseline summary")?,
-            required_u64(baseline, "attempts", "baseline summary")?,
-        )?;
-        let current_rate = required_f64(&comparison, "current_rate", "rate comparison")?;
-        let baseline_rate = required_f64(&comparison, "baseline_rate", "rate comparison")?;
-        let concentration = find_execution(executions, "concentration")?;
-        let top = concentration
-            .output
-            .as_array()
-            .and_then(|r| r.first())
-            .ok_or_else(|| AmosError::Execution("concentration output empty".into()))?;
-        let timeseries = find_execution(executions, "timeseries")?;
-        let points: Vec<(String, f64)> = timeseries
-            .output
-            .as_array()
-            .ok_or_else(|| AmosError::Execution("timeseries output is not rows".into()))?
-            .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                Ok((
-                    required_str(row, "hour", &format!("timeseries row {index}"))?.to_string(),
-                    required_f64(row, "failure_rate", &format!("timeseries row {index}"))?,
-                ))
-            })
-            .collect::<Result<_>>()?;
-        let processor = required_str(top, "processor", "concentration row")?;
-        let card_network = required_str(top, "card_network", "concentration row")?;
-        let concentration_rate = required_f64(top, "failure_rate", "concentration row")?;
-        let (svg, chart_hash) = self.charts.timeseries_svg(&points)?;
-        let artifact_id = stable_id("art", &(&atxn.tenant_id, &atxn.atxn_id, "report:v3"))?;
-        let report = format!(
-            "# Payment failure health review\n\nFailure rate increased from {:.1}% to {:.1}%. The largest concentration was {} / {} at {:.1}%. A gateway deployment preceded the spike, but causality and the dashboard action require review.\n\nChart hash: `{}`\n\n{}",
-            baseline_rate * 100.0,
-            current_rate * 100.0,
-            processor,
-            card_network,
-            concentration_rate * 100.0,
-            chart_hash,
-            svg
-        );
-        let artifact = Artifact {
-            tenant_id: atxn.tenant_id.clone(),
-            artifact_id: artifact_id.clone(),
-            atxn_id: atxn.atxn_id.clone(),
-            artifact_type: "report".into(),
-            title: "Payment failure health review".into(),
-            content: report.clone(),
-            content_hash: content_hash(&report)?,
-            audience: "internal".into(),
-            risk_class: RiskClass::MaterialInternal,
-            object_state: "finalized".into(),
-            publication_validity: PublicationValidity::Draft,
-            created_at: atxn.created_at,
-        };
-        let claims = vec![
-            claim(
-                &artifact,
-                "metric_comparison",
-                format!(
-                    "Payment failure rate increased from {:.1}% to {:.1}%.",
-                    baseline_rate * 100.0,
-                    current_rate * 100.0
-                ),
-                json!({"metric_id":"payment_failure_rate:v3","current_value":current_rate,"baseline_value":baseline_rate}),
-                vec![summary.execution_id.clone()],
-            )?,
-            claim(
-                &artifact,
-                "concentration",
-                format!("The largest failure concentration was {processor} / {card_network}."),
-                top.clone(),
-                vec![concentration.execution_id.clone()],
-            )?,
-            claim(
-                &artifact,
-                "causal",
-                "The gateway deployment may have contributed to the spike.".into(),
-                json!({"review_required":true}),
-                vec![],
-            )?,
-            claim(
-                &artifact,
-                "operational_recommendation",
-                "Update the executive dashboard with a warning while the cause remains under review."
-                    .into(),
-                json!({"review_required":true}),
-                vec![],
-            )?,
-        ];
-        let metric = role_id(manifest, "metric_definition")?;
-        let schema = role_id(manifest, "active_schema")?;
-        let data = role_id(manifest, "data_snapshot")?;
-        let mut edges = vec![];
-        for item in claims
-            .iter()
-            .filter(|c| matches!(c.claim_type.as_str(), "metric_comparison" | "concentration"))
-        {
-            for execution in &item.support_execution_ids {
-                edges.push(edge(
-                    atxn,
-                    &item.claim_id,
-                    "computed_by",
-                    "execution",
-                    execution,
-                    None,
-                )?);
-            }
-            edges.push(edge(
-                atxn,
-                &item.claim_id,
-                "governed_by_metric",
-                "memory",
-                &metric,
-                None,
-            )?);
-            edges.push(edge(
-                atxn,
-                &item.claim_id,
-                "governed_by_schema",
-                "memory",
-                &schema,
-                None,
-            )?);
-            edges.push(edge(
-                atxn,
-                &item.claim_id,
-                "scoped_to_data_state",
-                "memory",
-                &data,
-                None,
-            )?);
-        }
-        if let Some(document) = manifest.optional_selected.iter().find(|id| {
-            manifest.selected_objects.iter().any(|o| {
-                &o.object_id == *id && matches!(o.memory_type, crate::domain::MemoryType::Document)
-            })
-        }) {
-            for item in claims.iter().filter(|c| {
+            .filter(|object| {
                 matches!(
-                    c.claim_type.as_str(),
-                    "causal" | "operational_recommendation"
+                    object.memory_type,
+                    MemoryType::DataState
+                        | MemoryType::StreamState
+                        | MemoryType::Document
+                        | MemoryType::PriorAnalysis
+                        | MemoryType::Feedback
+                        | MemoryType::ReviewPolicy
                 )
-            }) {
-                edges.push(edge(
-                    atxn,
-                    &item.claim_id,
-                    "supported_by_document",
-                    "memory",
-                    document,
-                    None,
-                )?);
-            }
-        }
-        Ok((artifact, claims, edges))
+            })
+            .collect::<Vec<_>>();
+        let permitted_context = narrative_objects
+            .iter()
+            .map(|object| {
+                json!({
+                    "object_id":object.object_id,
+                    "logical_key":object.logical_key,
+                    "memory_type":object.memory_type,
+                    "summary":object.summary,
+                })
+            })
+            .collect::<Vec<_>>();
+        let permitted_memory_ids = narrative_objects
+            .iter()
+            .map(|object| object.object_id.clone())
+            .collect::<BTreeSet<_>>();
+        let fact_ids = catalog
+            .facts
+            .iter()
+            .map(|fact| fact.fact_id.clone())
+            .collect::<BTreeSet<_>>();
+        let narrative_facts = catalog
+            .facts
+            .iter()
+            .map(|fact| {
+                let qualitative_hint = match fact.claim_type.as_str() {
+                    "metric_comparison" => {
+                        "The governed metric changed between the baseline and current periods."
+                    }
+                    "concentration" => {
+                        "The governed result identifies the largest segment concentration."
+                    }
+                    "timeseries" => {
+                        "The governed result contains a daily trend with a freshness caveat."
+                    }
+                    _ => "A governed verified fact is available.",
+                };
+                json!({
+                    "fact_id": fact.fact_id,
+                    "claim_type": fact.claim_type,
+                    "qualitative_hint": qualitative_hint,
+                    "render_placeholder": format!("{{{{fact:{}}}}}", fact.fact_id),
+                    "freshness_labels": fact.freshness_labels,
+                    "governed_memory_ids": fact.governed_memory_ids,
+                })
+            })
+            .collect::<Vec<_>>();
+        let response_schema = narrative_response_schema_for_evidence(
+            &fact_ids,
+            &permitted_memory_ids,
+            &pack.review_triggering_claim_types,
+        );
+        let verified_execution_ids = catalog
+            .facts
+            .iter()
+            .flat_map(|fact| fact.supporting_execution_ids.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let output = self
+            .model
+            .generate_validated(
+                ModelRequestTemplate {
+                    tenant_id: atxn.tenant_id.clone(),
+                    atxn_id: atxn.atxn_id.clone(),
+                    purpose: ModelPurpose::Narrative,
+                    prompt_template_version: "amos.narrative.prompt.v2".into(),
+                    input_manifest_hash: catalog.content_hash.clone(),
+                    payload: json!({
+                        "narrative_instructions": [
+                            "Use render_placeholder values instead of copying numeric literals into model-authored text.",
+                            "Reference every verified fact exactly once in finding_order.",
+                            "Return exactly one separately reviewable judgment for each required_judgment_claim.",
+                            "Use only the supplied fact IDs and governed memory IDs.",
+                        ],
+                        "verified_fact_catalog": {
+                            "content_hash": catalog.content_hash,
+                            "facts": narrative_facts,
+                        },
+                        "permitted_context":permitted_context,
+                        "permitted_memory_ids":permitted_memory_ids,
+                        "required_judgment_claims": pack
+                            .review_triggering_claim_types
+                            .iter()
+                            .map(|claim_type| json!({
+                                "claim_type": claim_type,
+                                "review_required": true,
+                            }))
+                            .collect::<Vec<_>>(),
+                        "review_triggering_claim_types":
+                            pack.review_triggering_claim_types,
+                    }),
+                    response_schema,
+                    selected_object_ids: permitted_memory_ids.iter().cloned().collect(),
+                    verified_execution_ids,
+                    generation_config: self.model_generation.clone(),
+                },
+                |narrative: &NarrativePlan| {
+                    validate_narrative_plan(
+                        narrative,
+                        catalog,
+                        &permitted_memory_ids,
+                        pack,
+                    )
+                },
+            )
+            .await?;
+        self.store.append_audit(&AuditEvent {
+            event_id: stable_id("audit", &(&atxn.atxn_id, "model.narrative"))?,
+            tenant_id: atxn.tenant_id.clone(),
+            actor_id: format!("model:{}", output.invocation.model),
+            action: "model.narrative".into(),
+            target_type: "model_invocation".into(),
+            target_id: output.invocation.invocation_id.clone(),
+            request_id: Some(atxn.request_id.clone()),
+            atxn_id: Some(atxn.atxn_id.clone()),
+            outcome: "pass".into(),
+            policy_epoch: identity.policy_epoch,
+            details: json!({
+                "provider":output.invocation.provider,
+                "model":output.invocation.model,
+                "route_class":output.invocation.route_class,
+                "input_payload_hash":output.invocation.input_payload_hash,
+                "output_hash":output.invocation.output_hash,
+                "verified_execution_count":output.invocation.verified_execution_ids.len(),
+            }),
+            created_at: output.invocation.created_at,
+        })?;
+        Ok(output.value)
     }
 
     fn replay_package(
@@ -2192,6 +3068,7 @@ impl AmosRuntime {
         manifest: &ContextManifest,
         plan: &TypedPlan,
         executions: &[ExecutionRecord],
+        pack: &AnalysisPack,
     ) -> Result<ReplayPackage> {
         Ok(ReplayPackage {
             package_id: stable_id(
@@ -2204,8 +3081,8 @@ impl AmosRuntime {
             manifest_id: manifest.manifest_id.clone(),
             plan_id: plan.plan_id.clone(),
             execution_ids: executions.iter().map(|e| e.execution_id.clone()).collect(),
-            template: "payment_health_report:v3".into(),
-            render_config_hash: content_hash(&"payment_health_report:v3")?,
+            template: pack.report_template.clone(),
+            render_config_hash: content_hash(&pack.report_template)?,
             retained_until: artifact.created_at + Duration::days(365),
             expected_artifact_hash: artifact.content_hash.clone(),
             expected_execution_hashes: executions
@@ -2260,144 +3137,63 @@ impl AmosRuntime {
     }
 }
 
-fn step(
-    id: &str,
-    purpose: &str,
-    sql: String,
-    output: &str,
-    manifest: &ContextManifest,
-) -> PlanStep {
-    PlanStep {
-        step_id: id.into(),
-        purpose: purpose.into(),
-        tool: "sql.readonly.v1".into(),
-        source_id: SOURCE.into(),
-        input_object_ids: manifest
-            .selected_objects
-            .iter()
-            .map(|o| o.object_id.clone())
-            .collect(),
-        parameter_schema: format!("{id}.v1"),
-        parameters: json!({"sql":sql,"relations":["analytics","payments"]}),
-        expected_output_schema: output.into(),
-        limits: crate::domain::OperationLimits {
-            seconds: 30,
-            rows: 50_000,
-            bytes: 5_000_000,
-        },
-        max_attempts: 2,
-        repair_classes: BTreeSet::from(["COLUMN_SUPERSEDED".into()]),
-        verifier_profile: "payment_health.v2".into(),
-    }
-}
-fn claim(
-    artifact: &Artifact,
-    claim_type: &str,
-    text: String,
-    payload: Value,
-    executions: Vec<String>,
-) -> Result<Claim> {
-    Ok(Claim {
-        tenant_id: artifact.tenant_id.clone(),
-        claim_id: stable_id(
-            "clm",
-            &(&artifact.tenant_id, &artifact.artifact_id, claim_type),
-        )?,
-        artifact_id: artifact.artifact_id.clone(),
-        claim_type: claim_type.into(),
-        text,
-        payload,
-        risk_class: artifact.risk_class,
-        support_execution_ids: executions,
-        verification_ids: vec![],
-        publication_validity: PublicationValidity::Draft,
-        semantic_validity: SemanticValidity::Current,
-        policy_visibility: PolicyVisibility::Allowed,
-        replay_availability: ReplayAvailability::Level3,
-        review_state: if matches!(claim_type, "causal" | "operational_recommendation") {
-            ReviewState::NeedsReview
-        } else {
-            ReviewState::Verified
-        },
-        supersession_state: SupersessionState::Active,
-    })
-}
-fn edge(
-    atxn: &AnalyticalTransaction,
-    claim: &str,
-    relation: &str,
-    target_type: &str,
-    target: &str,
-    version: Option<String>,
-) -> Result<DependencyEdge> {
-    let mut e = DependencyEdge {
-        edge_id: stable_id(
-            "edge",
-            &(
-                &atxn.tenant_id,
-                &atxn.atxn_id,
-                claim,
-                relation,
-                target_type,
-                target,
-            ),
-        )?,
-        tenant_id: atxn.tenant_id.clone(),
-        from: EdgeEndpoint {
-            endpoint_type: "claim".into(),
-            id: claim.into(),
-        },
-        relation: relation.into(),
-        to: EdgeEndpoint {
-            endpoint_type: target_type.into(),
-            id: target.into(),
-        },
-        source_version: version,
-        created_by_atxn: atxn.atxn_id.clone(),
-        content_hash: String::new(),
-    };
-    e.content_hash = content_hash(&e)?;
-    Ok(e)
-}
-fn role_id(manifest: &ContextManifest, role: &str) -> Result<String> {
-    manifest
-        .required_role_coverage
-        .get(role)
-        .and_then(|ids| ids.first())
-        .cloned()
-        .ok_or_else(|| AmosError::RequiredRoleMissing(role.into()))
-}
-fn find_execution<'a>(values: &'a [ExecutionRecord], step: &str) -> Result<&'a ExecutionRecord> {
-    values
+fn validate_proposal_against_pack(
+    proposal: &PlanProposal,
+    pack: &AnalysisPack,
+    max_steps: u32,
+) -> Result<()> {
+    proposal.validate(max_steps)?;
+    let proposed_kinds = proposal
+        .steps
         .iter()
-        .find(|e| e.step_id == step)
-        .ok_or_else(|| AmosError::NotFound(format!("execution {step}")))
+        .map(|step| step.analysis_kind)
+        .collect::<BTreeSet<_>>();
+    if proposed_kinds != pack.required_analysis_kinds {
+        return Err(AmosError::Validation(
+            "model plan does not contain the exact required analysis kinds".into(),
+        ));
+    }
+    let allowed_relations = pack.source_relations.keys().collect::<BTreeSet<_>>();
+    for step in &proposal.steps {
+        if !step
+            .relations
+            .iter()
+            .all(|relation| allowed_relations.contains(relation))
+        {
+            return Err(AmosError::Validation(
+                "model plan requested a relation outside the pack allowlist".into(),
+            ));
+        }
+        let expected = pack
+            .result_schemas
+            .get(&step.analysis_kind)
+            .ok_or_else(|| AmosError::Validation("analysis result schema is missing".into()))?;
+        if &step.expected_columns != expected {
+            return Err(AmosError::Validation(
+                "model plan output shape does not match the pack".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
-fn required_u64(value: &Value, field: &str, context: &str) -> Result<u64> {
-    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
-        AmosError::Execution(format!("{context} requires unsigned integer field {field}"))
-    })
-}
-
-fn required_f64(value: &Value, field: &str, context: &str) -> Result<f64> {
-    value
-        .get(field)
-        .and_then(Value::as_f64)
-        .filter(|number| number.is_finite())
-        .ok_or_else(|| {
-            AmosError::Execution(format!("{context} requires finite numeric field {field}"))
-        })
-}
-
-fn required_str<'a>(value: &'a Value, field: &str, context: &str) -> Result<&'a str> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty())
-        .ok_or_else(|| {
-            AmosError::Execution(format!("{context} requires non-empty string field {field}"))
-        })
+fn sanitize_model_value(value: &Value, blocked_columns: &BTreeSet<String>) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .filter(|(key, _)| !blocked_columns.contains(key.as_str()))
+                .map(|(key, value)| (key.clone(), sanitize_model_value(value, blocked_columns)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| sanitize_model_value(value, blocked_columns))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
 }
 
 fn job_payload_string<'a>(job: &'a Job, field: &str) -> Result<&'a str> {
@@ -2427,10 +3223,4 @@ fn job_payload_usize(job: &Job, field: &str) -> Result<usize> {
         })?;
     usize::try_from(value)
         .map_err(|_| AmosError::Validation(format!("job field {field} is too large")))
-}
-
-fn parse_time(value: &str) -> Result<chrono::DateTime<Utc>> {
-    Ok(chrono::DateTime::parse_from_rfc3339(value)
-        .map_err(|error| AmosError::Validation(format!("invalid scenario timestamp: {error}")))?
-        .with_timezone(&Utc))
 }

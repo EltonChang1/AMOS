@@ -1,0 +1,12 @@
+.git
+.gitignore
+target
+data
+.demo-recording
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+tmp
+output

@@ -33,6 +33,12 @@ pub enum AmosError {
     Connector(String),
     #[error("execution failed: {0}")]
     Execution(String),
+    #[error("model unavailable: {0}")]
+    ModelUnavailable(String),
+    #[error("model request timed out")]
+    ModelTimeout,
+    #[error("model output invalid: {0}")]
+    ModelOutputInvalid(String),
     #[error("storage failure: {0}")]
     Storage(String),
     #[error("serialization failure: {0}")]
@@ -113,6 +119,18 @@ impl IntoResponse for AmosError {
                 "EXECUTION_FAILED",
                 true,
                 false,
+            ),
+            Self::ModelUnavailable(_) | Self::ModelTimeout => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "MODEL_UNAVAILABLE",
+                true,
+                false,
+            ),
+            Self::ModelOutputInvalid(_) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "MODEL_OUTPUT_INVALID",
+                false,
+                true,
             ),
             Self::Storage(_) | Self::Serialization(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

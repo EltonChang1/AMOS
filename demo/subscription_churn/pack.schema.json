@@ -1,0 +1,440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amos.local/schemas/analysis_pack.schema.json",
+  "title": "AMOS Analysis Pack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "pack_id",
+    "task_type",
+    "version",
+    "status",
+    "risk_class",
+    "time_window",
+    "required_roles",
+    "optional_roles",
+    "minimum_consistency",
+    "allowed_tools",
+    "budgets",
+    "source_relations",
+    "schemas",
+    "metric_required_filters",
+    "required_analysis_kinds",
+    "result_schemas",
+    "verifier_profile",
+    "review_triggering_claim_types",
+    "claim_types",
+    "chart",
+    "report_template",
+    "artifact_schema",
+    "audience",
+    "publication_policy"
+  ],
+  "properties": {
+    "pack_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "task_type": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "const": "approved"
+    },
+    "risk_class": {
+      "type": "string",
+      "enum": [
+        "exploratory",
+        "internal",
+        "material_internal",
+        "external",
+        "regulated"
+      ]
+    },
+    "time_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "current_start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "type": "string",
+          "minLength": 20
+        },
+        "current_start": {
+          "type": "string",
+          "minLength": 20
+        },
+        "end": {
+          "type": "string",
+          "minLength": 20
+        }
+      }
+    },
+    "required_roles": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "enum": [
+          "active_context",
+          "data_state",
+          "stream_state",
+          "schema",
+          "semantic_definition",
+          "document",
+          "prior_analysis",
+          "feedback",
+          "permission_policy",
+          "review_policy",
+          "execution",
+          "artifact",
+          "claim",
+          "provenance"
+        ]
+      }
+    },
+    "optional_roles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": [
+          "active_context",
+          "data_state",
+          "stream_state",
+          "schema",
+          "semantic_definition",
+          "document",
+          "prior_analysis",
+          "feedback",
+          "permission_policy",
+          "review_policy",
+          "execution",
+          "artifact",
+          "claim",
+          "provenance"
+        ]
+      }
+    },
+    "minimum_consistency": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": [
+          "C0",
+          "C1",
+          "C2"
+        ]
+      }
+    },
+    "allowed_tools": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_context_items",
+        "max_context_tokens",
+        "max_steps",
+        "max_repairs",
+        "max_rows",
+        "max_bytes",
+        "max_seconds"
+      ],
+      "properties": {
+        "max_context_items": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_context_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_repairs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "source_relations": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "schemas": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relation",
+          "time_field",
+          "permission_labels",
+          "allowed_columns",
+          "blocked_columns"
+        ],
+        "properties": {
+          "relation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "time_field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "permission_labels": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "allowed_columns": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "blocked_columns": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "metric_required_filters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required_analysis_kinds": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "rate_comparison",
+          "concentration",
+          "timeseries"
+        ]
+      }
+    },
+    "result_schemas": {
+      "type": "object",
+      "minProperties": 3,
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "verifier_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "rate_comparison",
+        "concentration",
+        "timeseries"
+      ],
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rate_comparison": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "period_field",
+            "current_label",
+            "baseline_label",
+            "numerator_field",
+            "denominator_field",
+            "rate_field"
+          ],
+          "properties": {
+            "period_field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "current_label": {
+              "type": "string",
+              "minLength": 1
+            },
+            "baseline_label": {
+              "type": "string",
+              "minLength": 1
+            },
+            "numerator_field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "denominator_field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "rate_field": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "concentration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "numerator_field",
+            "denominator_field",
+            "rate_field"
+          ],
+          "properties": {
+            "numerator_field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "denominator_field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "rate_field": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "timeseries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "label_field",
+            "value_field",
+            "accessible_label"
+          ],
+          "properties": {
+            "label_field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value_field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "accessible_label": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "review_triggering_claim_types": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "claim_types": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "chart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "x_label",
+        "y_label"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "x_label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "y_label": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "report_template": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact_schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "audience": {
+      "type": "string",
+      "minLength": 1
+    },
+    "publication_policy": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

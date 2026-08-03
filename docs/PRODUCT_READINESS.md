@@ -2,7 +2,7 @@
 
 Status: **control-layer reference slice complete; full analyst product not ready**
 
-Evidence date: 2026-07-22
+Evidence date: 2026-07-31
 
 Release: `amos 0.2.0`
 
@@ -21,8 +21,12 @@ product.
 - Product-critical gaps: local Gemma 4 agent, domain-neutral configuration,
   report and slide planning, deterministic PPTX/PDF/spreadsheet generation,
   production connectors, enterprise deployment, and customer validation.
-- Current payment-specific task, schema, metric, verifier, permissions, and UI
-  are a temporary fixture and must not define the product.
+- The runtime is pack-driven: task, schemas, metric filters, verifier
+  profile, budgets, chart, and publication policy load from versioned,
+  JSON-schema-validated analysis packs installed in the control DB and routed
+  by `task_type`. Reference packs: `demo/subscription_churn/pack.json` and
+  `demo/payment_failure_churn/pack.json` (filesystem-loaded; not compiled into
+  the engine). Admin install/list/inspect is exposed at `/v1/packs`.
 - Capacity deferral: final throughput, RSS, and noisy-neighbor qualification
   must be repeated on named release hardware; current local benchmark evidence
   is deterministic and threshold-gated but is not a production capacity claim.
@@ -59,7 +63,7 @@ product.
 | Area | Local completion evidence | Deployment-only remainder |
 |---|---|---|
 | Analyst agent | Typed plans already record `model_identity`; runtime contracts are independent of a model SDK | Implement provider-neutral model routing and customer-local Gemma 4 inference with structured plan, narrative and slide-plan outputs |
-| Domain neutrality | Task definitions, schemas, metrics, policies and verifier profiles are typed and versioned | Remove payment constants and load all domain behavior from configuration or installable task packs |
+| Domain neutrality | Task, schemas, metric filters, verifier profile, budgets, chart and publication policy load from one JSON-schema-validated analysis pack; the runtime carries no workflow constants | Support installing and validating multiple packs per tenant, pack authoring/approval workflow, and packs beyond the three fixed analysis kinds |
 | Artifact generation | Deterministic SVG chart worker, typed artifacts, claim evidence and hash-addressed local publication | Produce editable PPTX, PDF/HTML reports, dashboards and spreadsheets from verified result objects |
 | Tenancy and identity | Tenant predicates and composite ownership are enforced in repositories and policy; static demo provider fails closed; 401/403 and second-analyst tests pass | Enterprise OIDC/SAML, issuer/JWKS/session lifecycle and PostgreSQL forced RLS need real tenants and infrastructure |
 | Storage concurrency and migrations | Eight-permit blocking lane; independent-connection CAS tests; checksummed forward migration ledger and restart-safe backfill | PostgreSQL pool/online DDL, backup, PITR and RLS rehearsal |
@@ -109,12 +113,14 @@ configurable loopback port:
    returned 403.
 3. The browser attached the bearer header at the loopback origin. No identity
    was accepted from URLs or forms.
-4. Analyst submission produced `NeedsReview`, 414 exact context tokens, six
-   selected objects, three typed steps, three fenced executions, ten dependency
-   edges, four typed claims and level-3 replay evidence.
+4. Analyst submission produced `NeedsReview`, a frozen context manifest with
+   exact token accounting and full required-role coverage, three typed steps,
+   three fenced executions, five typed claims with dependency edges, and
+   level-3 replay evidence.
 5. Browser replay created a new A-TXN and three new executions; all comparisons
    were `Exact` and the original remained unchanged.
-6. Review Queue displayed four claims and ten edges. Reviewer approval required
+6. Review Queue displayed every pending claim and its dependency edges.
+   Reviewer approval required
    an explicit confirmation and reason, appended a durable review, advanced the
    original lifecycle to `Published`, and set publication validity to
    `ValidAtPublication`.
@@ -150,7 +156,7 @@ git diff --check
 AMOS_BENCH_MEMORY_ITEMS=10000 cargo bench --bench control_paths
 ```
 
-Both debug and release profiles run 64 tests (31 library, 15 API/CLI/UI and 18
+Both debug and release profiles run 98 tests (52 library, 21 API/CLI/UI and 25
 end-to-end runtime tests), with zero failures or ignored tests. `--all-targets`
 also executes the control-path benchmark. The release benchmark used 10,000
 memory objects and passed every threshold.
@@ -179,4 +185,4 @@ failure envelope of a distributed deployment. The static bearer identities are
 demo-only. Interactive browser use requires a dedicated local header rule; the
 credential must never be placed in a URL. Capacity numbers describe this local
 machine and build only. These boundaries leave no known critical gap inside
-the legacy reference fixture, but the full product gaps above remain open.
+the pack-driven reference slice, but the full product gaps above remain open.

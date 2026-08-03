@@ -52,7 +52,7 @@ defines Specifications A-F for the control and analysis runtime.
 | Gap-register area | Local completion evidence | Deployment-only remainder |
 |---|---|---|
 | Analyst agent | `TypedPlan` records a planner identity and the runtime is independent of a model SDK | Implement the `ModelProvider` contract, local Gemma 4 serving, structured outputs, failure handling and model evaluation |
-| Domain configuration | Task, memory, policy and verifier concepts are typed | Remove payment-specific constants and load task, metric, schema, policy, verifier and artifact definitions from configuration |
+| Domain configuration | Task, schemas, metric filters, verifier profile, budgets, chart and publication policy load from one JSON-schema-validated analysis pack (`packs::AnalysisPack`); the runtime carries no workflow constants | Support installing and validating multiple packs per tenant, pack authoring/approval workflow, and analysis kinds beyond rate comparison, concentration and timeseries |
 | Artifact compiler | The chart worker produces deterministic hash-bound SVG and the runtime stores typed artifacts | Add report and slide planning plus editable PPTX, PDF/HTML, dashboard and spreadsheet renderers |
 | Tenancy and identity | Every repository key and policy read is tenant scoped; source-event processing binds the authenticated tenant; missing, cross-tenant, stale-epoch, and hidden-claim tests fail closed | Enterprise OIDC/SAML issuer, JWKS, session, and PostgreSQL forced-RLS configuration require an identity tenant and database |
 | Storage concurrency/migrations | Tokio-facing database work uses an eight-permit blocking lane; CAS/fence concurrency tests cover independent connections; schema v6 has a checksummed forward-only ledger, legacy backfill, and future/tampered-version rejection | PostgreSQL pool sizing, online DDL, rollback rehearsal, forced RLS, backup and point-in-time restore require a deployed cluster |
@@ -60,7 +60,7 @@ defines Specifications A-F for the control and analysis runtime.
 | Connector durability | Connector events are durable, unique by source deduplication key, cursor paged at 250, and survive connector restart; unknown cursors fail closed | Customer connector credentials, auth rotation, vendor quotas, and certified outage fixtures |
 | SQL/capabilities | Frozen one-query AST subset, time-window/function/join/subquery rules, query-only SQLite, HMAC verification, full claim binding, cancellation, wall time, incremental rows and bytes | KMS/HSM key custody and container/VM worker identities and egress controls |
 | Runtime recovery | `recover_task` is state driven and resumes persisted manifest/plan/execution/evidence checkpoints; the recovery test recreates the runtime at fourteen automatic and post-review boundaries | Multi-process controller election and distributed worker placement |
-| Verification | Execution/verifier/memory references, numeric rates, concentration payloads, statistical constraints, and deterministic chart SVG/hash binding are independently recomputed | Configuration-driven verifier packs beyond the legacy reference fixture |
+| Verification | Execution/verifier/memory references, numeric rates, concentration payloads, statistical constraints, and deterministic chart SVG/hash binding are independently recomputed against the pack-defined verifier profile | Verifier profiles for analysis kinds beyond the three fixed query shapes and for real customer tasks |
 | Policy/invalidation | Policy epochs are checked on execution, commit, recovery, and reads; transitive reverse traversal has a visited set, quotas, durable cursors, idempotent revalidation jobs, and storm-bounded pages | External policy evaluator and organization-specific activation/simulation workflow |
 | Replay/publication | Replay persists a new A-TXN and comparisons; filesystem objects stage, fsync, hash-check, atomically promote, and recover lost acknowledgments | S3/GCS residency/lifecycle and external destination acknowledgment/revocation adapters |
 | Outbox/jobs | Leases, owner/fence checks, renewal, exponential retry, dead letter, bounded dispatch/worker batches, shutdown, expired-lease recovery, and delivery-error tests | Message-broker adapter and production alert routing |
@@ -72,14 +72,16 @@ defines Specifications A-F for the control and analysis runtime.
 ## Current reference fixture
 
 The executable code is currently bounded to a configured tenant, one read-only
-SQL source, a legacy payment-specific metric fixture, three query shapes, one
-structured chart, one report template, and one reviewer role. This fixture
-proves the control-layer lifecycle but is not the product definition.
+SQL source, multiple installable analysis packs routed by `task_type`, three
+query shapes, pack-defined charts/report templates, and one reviewer role.
+Demo packs live under `demo/*/pack.json` and install through the control DB /
+`amos pack` CLI; only the default subscription pack remains compiled in for
+bootstrap. This slice proves multi-pack control-layer lifecycle but is not the
+product definition.
 
-The next implementation slice must replace payment-specific behavior with
-configuration, integrate a local Gemma 4 analyst agent, accept a
-domain-neutral business question, and produce verified graphs, a report, and an
-editable slide deck.
+The next implementation slice must broaden analysis kinds, integrate a local
+Gemma 4 analyst agent, accept a domain-neutral business question, and produce
+verified graphs, a report, and an editable slide deck.
 
 ## External boundaries
 

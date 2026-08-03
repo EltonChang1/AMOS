@@ -30,9 +30,9 @@ flowchart LR
 The model understands the request, proposes the plan, drafts tool calls,
 interprets verified results, and plans the report and slides. AMOS controls
 access, executes authoritative calculations, checks every material claim, and
-renders the final artifacts. Payment analysis is not the product. The current
-payment-specific code is a temporary implementation fixture that must be
-replaced by domain-neutral configuration.
+renders the final artifacts. Subscription-churn analysis is not the product.
+It is the reference analysis pack: all workflow behavior loads from a
+versioned, schema-validated pack configuration rather than hardcoded logic.
 
 Every business answer falls into one of three categories:
 
@@ -71,8 +71,8 @@ checks, bounded execution, deterministic statistics and charting, claim-level
 evidence, human review, invalidation, replay, an HTTP API, a CLI, and four
 server-rendered product pages.
 
-The executable fixture is still payment-specific. It does not yet include the
-Gemma 4 analyst agent, a general report and slide planner, PPTX/PDF/spreadsheet
+The executable slice is pack-driven but ships one reference pack. It does not
+yet include the Gemma 4 analyst agent, a general report and slide planner, PPTX/PDF/spreadsheet
 generation, production customer connectors, enterprise login, hardened remote
 workers, or a supported customer deployment package. Those are required
 product work, not completed features.
@@ -404,7 +404,7 @@ The local product includes:
 - one configured tenant;
 - static local demo identities;
 - one read-only SQLite warehouse connector;
-- one legacy payment-specific metric fixture;
+- one installed analysis pack (subscription churn);
 - typed, versioned, permission-aware memory;
 - bounded context with exact token accounting;
 - parsed read-only SQL checks;
@@ -1555,9 +1555,10 @@ milestones, not lines of code alone.
 permission-safe context, verifies and runs read-only SQL, statistics, and
 charting, stores claim-level evidence, supports human review, and handles
 source-change invalidation and replay. It has an API, CLI, four web pages, and a
-release-gated test suite. The current fixture is payment-specific. We have not
-yet integrated Gemma 4, generalized the workflow, generated complete slide
-decks, or connected a production customer system.
+release-gated test suite. The workflow is configuration-driven with one
+reference analysis pack. We have not yet integrated Gemma 4 in production,
+supported multiple packs, generated complete slide decks, or connected a
+production customer system.
 
 **Answering tip:** Lead with what can be demonstrated. End with the most
 important limitation.

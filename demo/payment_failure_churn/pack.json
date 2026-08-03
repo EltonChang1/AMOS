@@ -1,0 +1,137 @@
+{
+  "pack_id": "payment_failure_churn",
+  "task_type": "payment_failure_churn_review",
+  "version": 1,
+  "status": "approved",
+  "risk_class": "material_internal",
+  "time_window": {
+    "start": "2026-07-13T00:00:00Z",
+    "current_start": "2026-07-20T00:00:00Z",
+    "end": "2026-07-27T00:00:00Z"
+  },
+  "required_roles": {
+    "metric_definition": "semantic_definition",
+    "active_schema": "schema",
+    "data_snapshot": "data_state",
+    "user_policy": "permission_policy",
+    "review_policy": "review_policy"
+  },
+  "optional_roles": {
+    "launch_event": "document",
+    "prior_guidance": "prior_analysis",
+    "reviewer_feedback": "feedback"
+  },
+  "minimum_consistency": {
+    "metric_definition": "C1",
+    "active_schema": "C1",
+    "data_snapshot": "C2",
+    "user_policy": "C1",
+    "review_policy": "C1"
+  },
+  "allowed_tools": [
+    "sql.readonly.v1",
+    "stats.rate_comparison.v1",
+    "chart.timeseries.v1"
+  ],
+  "budgets": {
+    "max_context_items": 16,
+    "max_context_tokens": 8000,
+    "max_steps": 3,
+    "max_repairs": 1,
+    "max_rows": 5000,
+    "max_bytes": 1000000,
+    "max_seconds": 30
+  },
+  "source_relations": {
+    "subscription_events": "warehouse_primary"
+  },
+  "schemas": [
+    {
+      "relation": "subscription_events",
+      "time_field": "event_date",
+      "permission_labels": ["analytics", "subscriptions"],
+      "allowed_columns": [
+        "event_date",
+        "account_id",
+        "segment",
+        "plan_tier",
+        "environment",
+        "is_test_account",
+        "churned",
+        "churn_type",
+        "churn_reason",
+        "monthly_recurring_revenue",
+        "support_contact_count"
+      ],
+      "blocked_columns": ["customer_email", "raw_support_note"]
+    }
+  ],
+  "metric_required_filters": [
+    "segment = 'SMB'",
+    "environment = 'production'",
+    "is_test_account = 0"
+  ],
+  "required_analysis_kinds": [
+    "rate_comparison",
+    "concentration",
+    "timeseries"
+  ],
+  "result_schemas": {
+    "rate_comparison": [
+      "period",
+      "churned_accounts",
+      "eligible_accounts",
+      "churn_rate"
+    ],
+    "concentration": [
+      "plan_tier",
+      "churn_reason",
+      "churned_accounts",
+      "eligible_accounts",
+      "churn_rate"
+    ],
+    "timeseries": ["day", "churn_rate"]
+  },
+  "verifier_profile": {
+    "profile_id": "payment_failure_churn.v1",
+    "rate_comparison": {
+      "period_field": "period",
+      "current_label": "current",
+      "baseline_label": "baseline",
+      "numerator_field": "churned_accounts",
+      "denominator_field": "eligible_accounts",
+      "rate_field": "churn_rate"
+    },
+    "concentration": {
+      "numerator_field": "churned_accounts",
+      "denominator_field": "eligible_accounts",
+      "rate_field": "churn_rate"
+    },
+    "timeseries": {
+      "label_field": "day",
+      "value_field": "churn_rate",
+      "accessible_label": "Payment-failure churn rate by day"
+    }
+  },
+  "review_triggering_claim_types": [
+    "causal",
+    "operational_recommendation"
+  ],
+  "claim_types": [
+    "metric_value",
+    "metric_comparison",
+    "concentration",
+    "timeseries",
+    "causal",
+    "operational_recommendation"
+  ],
+  "chart": {
+    "title": "Payment-failure churn by day",
+    "x_label": "Day",
+    "y_label": "Payment-failure churn rate"
+  },
+  "report_template": "payment_failure_churn_report:v1",
+  "artifact_schema": "payment_failure_churn_report.v1",
+  "audience": "revenue operations",
+  "publication_policy": "human_review_required"
+}

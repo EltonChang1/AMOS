@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     Result,
+    artifacts::VerifiedFactCatalog,
     domain::{
         AnalyticalTransaction, Artifact, AtxnState, AuditEvent, Claim, ContextManifest,
         DependencyEdge, ErasureReceipt, ExecutionRecord, Job, JobState, MemoryObject, MemoryStatus,
@@ -18,9 +19,23 @@ use crate::{
         VerificationRecord, content_hash, stable_id,
     },
     error::AmosError,
+    model::ModelInvocation,
+    packs::AnalysisPack,
 };
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 6;
+pub const CURRENT_SCHEMA_VERSION: u32 = 9;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnalysisPackRecord {
+    pub tenant_id: String,
+    pub pack_id: String,
+    pub task_type: String,
+    pub version: u32,
+    pub status: String,
+    pub content_hash: String,
+    pub installed_by: String,
+    pub installed_at: DateTime<Utc>,
+}
 
 #[derive(Clone)]
 pub struct Store {
@@ -173,6 +188,29 @@ impl Store {
                 tenant_id TEXT NOT NULL, plan_id TEXT NOT NULL, atxn_id TEXT NOT NULL,
                 body_json TEXT NOT NULL, PRIMARY KEY (tenant_id, plan_id)
             );
+            CREATE TABLE IF NOT EXISTS model_invocations (
+                tenant_id TEXT NOT NULL,
+                invocation_id TEXT NOT NULL,
+                atxn_id TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                body_json TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, invocation_id),
+                UNIQUE (tenant_id, atxn_id, purpose, attempt)
+            );
+            CREATE INDEX IF NOT EXISTS idx_model_invocation_atxn
+                ON model_invocations(tenant_id, atxn_id, purpose, attempt);
+            CREATE TABLE IF NOT EXISTS verified_fact_catalogs (
+                tenant_id TEXT NOT NULL,
+                catalog_id TEXT NOT NULL,
+                atxn_id TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                body_json TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, catalog_id),
+                UNIQUE (tenant_id, atxn_id)
+            );
             CREATE TABLE IF NOT EXISTS executions (
                 tenant_id TEXT NOT NULL, execution_id TEXT NOT NULL, atxn_id TEXT NOT NULL,
                 step_id TEXT NOT NULL, output_hash TEXT NOT NULL, fencing_token INTEGER NOT NULL,
@@ -285,6 +323,20 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS idx_jobs_ready
                 ON jobs(tenant_id, state, next_run_at, lease_expires_at);
+            CREATE TABLE IF NOT EXISTS analysis_packs (
+                tenant_id TEXT NOT NULL,
+                pack_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                task_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                installed_by TEXT NOT NULL,
+                installed_at TEXT NOT NULL,
+                body_json TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, pack_id, version)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pack_task_type
+                ON analysis_packs(tenant_id, task_type, version);
             "#,
         )?;
         add_column_if_missing(
@@ -383,6 +435,9 @@ impl Store {
             (4, "outbox_leases", "amos-outbox-leases-v4"),
             (5, "replay_comparisons", "amos-replay-comparison-v5"),
             (6, "retention_erasure", "amos-retention-erasure-v6"),
+            (7, "model_invocations", "amos-model-invocations-v7"),
+            (8, "verified_fact_catalogs", "amos-verified-facts-v8"),
+            (9, "analysis_packs", "amos-analysis-packs-v9"),
         ] {
             record_migration(&connection, version, name, contract)?;
         }
@@ -602,6 +657,188 @@ impl Store {
         )
     }
 
+    /// Idempotently installs a versioned analysis pack and its derived task
+    /// definition in one transaction. Returns `true` when the pack version was
+    /// newly installed and `false` when the identical version was already
+    /// present. Installing a different body under an existing (pack_id,
+    /// version) or claiming a task type owned by another pack is a conflict:
+    /// pack versions are immutable, and task routing must stay unambiguous.
+    pub fn install_analysis_pack(
+        &self,
+        tenant: &str,
+        pack: &AnalysisPack,
+        installed_by: &str,
+        installed_at: DateTime<Utc>,
+    ) -> Result<bool> {
+        pack.validate()?;
+        let definition = pack.to_task_definition(tenant)?;
+        let hash = content_hash(pack)?;
+        let mut connection = self.connection()?;
+        let database = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<String> = database
+            .query_row(
+                "SELECT content_hash FROM analysis_packs
+                 WHERE tenant_id=?1 AND pack_id=?2 AND version=?3",
+                params![tenant, pack.pack_id, pack.version],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing_hash) = existing {
+            database.execute(
+                "INSERT OR IGNORE INTO task_definitions
+                 (tenant_id,task_type,version,status,body_json) VALUES (?1,?2,?3,?4,?5)",
+                params![
+                    definition.tenant_id,
+                    definition.task_type,
+                    definition.version,
+                    definition.status,
+                    to_json(&definition)?
+                ],
+            )?;
+            database.commit()?;
+            return if existing_hash == hash {
+                Ok(false)
+            } else {
+                Err(AmosError::Conflict(format!(
+                    "analysis pack {} version {} is already installed with different content",
+                    pack.pack_id, pack.version
+                )))
+            };
+        }
+        let task_type_owner: Option<String> = database
+            .query_row(
+                "SELECT pack_id FROM analysis_packs
+                 WHERE tenant_id=?1 AND task_type=?2 AND pack_id<>?3 LIMIT 1",
+                params![tenant, pack.task_type, pack.pack_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(owner) = task_type_owner {
+            return Err(AmosError::Conflict(format!(
+                "task type {} is already owned by installed pack {owner}",
+                pack.task_type
+            )));
+        }
+        database.execute(
+            "INSERT INTO analysis_packs
+             (tenant_id,pack_id,version,task_type,status,content_hash,installed_by,installed_at,body_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                tenant,
+                pack.pack_id,
+                pack.version,
+                pack.task_type,
+                pack.status,
+                hash,
+                installed_by,
+                installed_at.to_rfc3339(),
+                to_json(pack)?
+            ],
+        )?;
+        database.execute(
+            "INSERT OR IGNORE INTO task_definitions
+             (tenant_id,task_type,version,status,body_json) VALUES (?1,?2,?3,?4,?5)",
+            params![
+                definition.tenant_id,
+                definition.task_type,
+                definition.version,
+                definition.status,
+                to_json(&definition)?
+            ],
+        )?;
+        database.commit()?;
+        Ok(true)
+    }
+
+    pub fn get_analysis_pack_by_task_type(
+        &self,
+        tenant: &str,
+        task_type: &str,
+    ) -> Result<Option<AnalysisPack>> {
+        self.get_json(
+            "SELECT body_json FROM analysis_packs
+             WHERE tenant_id=?1 AND task_type=?2 AND status='approved'
+             ORDER BY version DESC LIMIT 1",
+            params![tenant, task_type],
+        )
+    }
+
+    pub fn get_analysis_pack_by_task_type_version(
+        &self,
+        tenant: &str,
+        task_type: &str,
+        version: u32,
+    ) -> Result<Option<AnalysisPack>> {
+        self.get_json(
+            "SELECT body_json FROM analysis_packs
+             WHERE tenant_id=?1 AND task_type=?2 AND version=?3 AND status='approved'",
+            params![tenant, task_type, version],
+        )
+    }
+
+    pub fn get_analysis_pack(&self, tenant: &str, pack_id: &str) -> Result<Option<AnalysisPack>> {
+        self.get_json(
+            "SELECT body_json FROM analysis_packs
+             WHERE tenant_id=?1 AND pack_id=?2 AND status='approved'
+             ORDER BY version DESC LIMIT 1",
+            params![tenant, pack_id],
+        )
+    }
+
+    pub fn list_analysis_packs(&self, tenant: &str) -> Result<Vec<AnalysisPackRecord>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT tenant_id,pack_id,task_type,version,status,content_hash,installed_by,installed_at
+             FROM analysis_packs WHERE tenant_id=?1 ORDER BY pack_id, version",
+        )?;
+        let records = statement
+            .query_map(params![tenant], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u32>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        records
+            .into_iter()
+            .map(
+                |(
+                    tenant_id,
+                    pack_id,
+                    task_type,
+                    version,
+                    status,
+                    content_hash,
+                    installed_by,
+                    installed_at,
+                )| {
+                    Ok(AnalysisPackRecord {
+                        tenant_id,
+                        pack_id,
+                        task_type,
+                        version,
+                        status,
+                        content_hash,
+                        installed_by,
+                        installed_at: DateTime::parse_from_rfc3339(&installed_at)
+                            .map_err(|error| {
+                                AmosError::Storage(format!(
+                                    "analysis pack installed_at is invalid: {error}"
+                                ))
+                            })?
+                            .with_timezone(&Utc),
+                    })
+                },
+            )
+            .collect()
+    }
+
     pub fn create_transaction(
         &self,
         transaction: &AnalyticalTransaction,
@@ -658,6 +895,18 @@ impl Store {
         self.get_json(
             "SELECT body_json FROM atxn_transactions WHERE tenant_id=?1 AND atxn_id=?2",
             params![tenant, atxn_id],
+        )
+    }
+
+    pub fn get_transaction_by_idempotency_key(
+        &self,
+        tenant: &str,
+        idempotency_key: &str,
+    ) -> Result<Option<AnalyticalTransaction>> {
+        self.get_json(
+            "SELECT body_json FROM atxn_transactions
+             WHERE tenant_id=?1 AND idempotency_key=?2",
+            params![tenant, idempotency_key],
         )
     }
 
@@ -840,6 +1089,162 @@ impl Store {
         self.get_json(
             "SELECT body_json FROM plans
              WHERE tenant_id=?1 AND atxn_id=?2 ORDER BY rowid DESC LIMIT 1",
+            params![tenant, atxn_id],
+        )
+    }
+
+    pub fn save_model_invocation(&self, invocation: &ModelInvocation) -> Result<ModelInvocation> {
+        if invocation.tenant_id.trim().is_empty()
+            || invocation.invocation_id.trim().is_empty()
+            || invocation.atxn_id.trim().is_empty()
+            || invocation.provider.trim().is_empty()
+            || invocation.model.trim().is_empty()
+            || invocation.attempt == 0
+        {
+            return Err(AmosError::Validation(
+                "model invocation requires tenant, invocation, A-TXN, provider, model, and attempt"
+                    .into(),
+            ));
+        }
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "INSERT OR IGNORE INTO model_invocations
+             (tenant_id,invocation_id,atxn_id,purpose,attempt,status,created_at,body_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                invocation.tenant_id,
+                invocation.invocation_id,
+                invocation.atxn_id,
+                enum_json(&invocation.purpose)?,
+                i64::from(invocation.attempt),
+                enum_json(&invocation.status)?,
+                invocation.created_at.to_rfc3339(),
+                to_json(invocation)?,
+            ],
+        )?;
+        if changed == 1 {
+            return Ok(invocation.clone());
+        }
+        let existing: ModelInvocation = connection
+            .query_row(
+                "SELECT body_json FROM model_invocations
+             WHERE tenant_id=?1 AND invocation_id=?2",
+                params![invocation.tenant_id, invocation.invocation_id],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(AmosError::from)
+            .and_then(|body| from_json(&body))?;
+        if existing == *invocation {
+            Ok(existing)
+        } else {
+            Err(AmosError::IdempotencyConflict(
+                invocation.invocation_id.clone(),
+            ))
+        }
+    }
+
+    pub fn get_model_invocation(
+        &self,
+        tenant: &str,
+        invocation_id: &str,
+    ) -> Result<Option<ModelInvocation>> {
+        self.get_json(
+            "SELECT body_json FROM model_invocations
+             WHERE tenant_id=?1 AND invocation_id=?2",
+            params![tenant, invocation_id],
+        )
+    }
+
+    pub fn list_model_invocations(
+        &self,
+        tenant: &str,
+        atxn_id: &str,
+    ) -> Result<Vec<ModelInvocation>> {
+        self.list_json(
+            "SELECT body_json FROM model_invocations
+             WHERE tenant_id=?1 AND atxn_id=?2
+             ORDER BY purpose, attempt",
+            params![tenant, atxn_id],
+        )
+    }
+
+    pub fn model_compatibility_probe_passed(&self, tenant: &str) -> Result<bool> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                      FROM model_invocations AS invocation
+                      JOIN atxn_transactions AS atxn
+                        ON atxn.tenant_id = invocation.tenant_id
+                       AND atxn.atxn_id = invocation.atxn_id
+                     WHERE invocation.tenant_id = ?1
+                       AND atxn.idempotency_key LIKE 'live_model_probe_%'
+                       AND invocation.status = 'pass'
+                     GROUP BY invocation.atxn_id
+                    HAVING COUNT(DISTINCT invocation.purpose) = 2
+                 )",
+                params![tenant],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn save_verified_fact_catalog(
+        &self,
+        catalog: &VerifiedFactCatalog,
+    ) -> Result<VerifiedFactCatalog> {
+        if catalog.tenant_id.trim().is_empty()
+            || catalog.catalog_id.trim().is_empty()
+            || catalog.atxn_id.trim().is_empty()
+            || catalog.content_hash.trim().is_empty()
+            || catalog.facts.is_empty()
+            || catalog.content_hash != content_hash(&catalog.facts)?
+        {
+            return Err(AmosError::Validation(
+                "verified fact catalog identity, facts, or hash is invalid".into(),
+            ));
+        }
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "INSERT OR IGNORE INTO verified_fact_catalogs
+             (tenant_id,catalog_id,atxn_id,content_hash,body_json)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![
+                catalog.tenant_id,
+                catalog.catalog_id,
+                catalog.atxn_id,
+                catalog.content_hash,
+                to_json(catalog)?,
+            ],
+        )?;
+        if changed == 1 {
+            return Ok(catalog.clone());
+        }
+        let existing: VerifiedFactCatalog = connection
+            .query_row(
+                "SELECT body_json FROM verified_fact_catalogs
+                 WHERE tenant_id=?1 AND atxn_id=?2",
+                params![catalog.tenant_id, catalog.atxn_id],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(AmosError::from)
+            .and_then(|body| from_json(&body))?;
+        if existing == *catalog {
+            Ok(existing)
+        } else {
+            Err(AmosError::IdempotencyConflict(catalog.catalog_id.clone()))
+        }
+    }
+
+    pub fn get_verified_fact_catalog(
+        &self,
+        tenant: &str,
+        atxn_id: &str,
+    ) -> Result<Option<VerifiedFactCatalog>> {
+        self.get_json(
+            "SELECT body_json FROM verified_fact_catalogs
+             WHERE tenant_id=?1 AND atxn_id=?2",
             params![tenant, atxn_id],
         )
     }
@@ -1808,7 +2213,38 @@ impl Store {
 
     pub fn append_audit(&self, event: &AuditEvent) -> Result<()> {
         let connection = self.connection()?;
-        insert_audit_tx(&connection, event)
+        let changed = connection.execute(
+            "INSERT OR IGNORE INTO audit_events
+             (tenant_id,event_id,actor_id,action,target_type,target_id,created_at,body_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                event.tenant_id,
+                event.event_id,
+                event.actor_id,
+                event.action,
+                event.target_type,
+                event.target_id,
+                event.created_at.to_rfc3339(),
+                to_json(event)?,
+            ],
+        )?;
+        if changed == 1 {
+            return Ok(());
+        }
+        let existing: AuditEvent = connection
+            .query_row(
+                "SELECT body_json FROM audit_events
+                 WHERE tenant_id=?1 AND event_id=?2",
+                params![event.tenant_id, event.event_id],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(AmosError::from)
+            .and_then(|body| from_json(&body))?;
+        if existing == *event {
+            Ok(())
+        } else {
+            Err(AmosError::IdempotencyConflict(event.event_id.clone()))
+        }
     }
 
     pub fn set_retention(
@@ -3762,8 +4198,8 @@ mod tests {
             idempotency_key: idempotency_key.into(),
             request_hash: request_hash.into(),
             subject_id: "analyst".into(),
-            request: "Investigate payment failures".into(),
-            task_type: "payment_health_review".into(),
+            request: "Investigate the churn increase".into(),
+            task_type: "subscription_churn_review".into(),
             task_version: 1,
             risk_class: RiskClass::MaterialInternal,
             budgets: Budgets::default(),

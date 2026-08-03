@@ -50,16 +50,41 @@ impl ContextCompiler {
             .chain(definition.optional_roles.values())
             .copied()
             .collect();
-        let retrieved = self.memory.retrieve(
+        let mut retrieved = self.memory.retrieve(
             identity,
             &RetrieveQuery {
                 task_text: request.into(),
+                required_types: types.clone(),
+                time_start: start,
+                time_end: end,
+                max_items: definition.budgets.max_context_items.saturating_mul(4),
+            },
+        )?;
+        // Role coverage is governed by the task definition, not by lexical
+        // overlap with the analyst's question, so union in a types-only
+        // retrieval: the question text remains a ranking signal below but must
+        // never filter out a required governed object.
+        let baseline = self.memory.retrieve(
+            identity,
+            &RetrieveQuery {
+                task_text: String::new(),
                 required_types: types,
                 time_start: start,
                 time_end: end,
                 max_items: definition.budgets.max_context_items.saturating_mul(4),
             },
         )?;
+        let seen: BTreeSet<&str> = retrieved
+            .items
+            .iter()
+            .map(|item| item.object_id.as_str())
+            .collect();
+        let missing = baseline
+            .items
+            .into_iter()
+            .filter(|item| !seen.contains(item.object_id.as_str()))
+            .collect::<Vec<_>>();
+        retrieved.items.extend(missing);
         let (reconciled, conflicts) = self.memory.reconcile(retrieved.items);
         if !conflicts.is_empty() {
             return Ok(ContextManifest {
@@ -333,12 +358,42 @@ fn append_ranking_trace(
 fn relevance_score(item: &MemoryObject, request: &str) -> u64 {
     let searchable =
         format!("{} {} {}", item.logical_key, item.summary, item.content).to_lowercase();
-    request
+    let key = item.logical_key.to_lowercase();
+    let request_lower = request.to_lowercase();
+    let request_terms = request_lower
         .split(|character: char| !character.is_alphanumeric())
         .filter(|term| term.len() > 2)
-        .map(str::to_lowercase)
-        .filter(|term| searchable.contains(term))
-        .count() as u64
+        .collect::<Vec<_>>();
+    let mut score = 0_u64;
+    for term in &request_terms {
+        if searchable.contains(term) {
+            score += 1;
+        }
+        // Prefer objects whose logical key carries the analyst's terms so
+        // multiple metric_definition candidates remain unambiguous across packs.
+        if key
+            .split(|character: char| !character.is_alphanumeric())
+            .any(|part| part == *term)
+        {
+            score += 3;
+        }
+    }
+    // Prefer the key whose distinctive tokens are covered by the request.
+    // Unmatched tokens (e.g. payment/failure vs logo) break ties between packs.
+    let key_parts = key
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|part| part.len() > 2 && *part != "metric")
+        .collect::<Vec<_>>();
+    if !key_parts.is_empty() {
+        let matched = key_parts
+            .iter()
+            .filter(|part| request_terms.contains(part))
+            .count() as u64;
+        let unmatched = key_parts.len() as u64 - matched;
+        score = score.saturating_add(matched.saturating_mul(2));
+        score = score.saturating_sub(unmatched);
+    }
+    score
 }
 
 fn exact_token_count(item: &MemoryObject) -> Result<usize> {

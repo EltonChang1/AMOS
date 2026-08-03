@@ -79,12 +79,13 @@ impl SqliteWarehouseConnector {
         source_id: impl Into<String>,
         path: impl AsRef<Path>,
         capability_issuer: CapabilityIssuer,
+        permissions: BTreeSet<String>,
     ) -> Self {
         Self {
             tenant_id: tenant_id.into(),
             source_id: source_id.into(),
             path: path.as_ref().to_path_buf(),
-            permissions: BTreeSet::from(["analytics".into(), "payments".into()]),
+            permissions,
             capability_issuer,
         }
     }
@@ -356,6 +357,7 @@ mod tests {
             "warehouse",
             file.path(),
             CapabilityIssuer::new([9_u8; 32]).unwrap(),
+            BTreeSet::from(["analytics".into()]),
         );
         let first = connector.observe("table:payments").await.unwrap();
         let second = connector.observe("table:payments").await.unwrap();
@@ -381,8 +383,13 @@ mod tests {
             .execute("CREATE TABLE payments(id TEXT)", [])
             .unwrap();
         let issuer = CapabilityIssuer::new([4_u8; 32]).unwrap();
-        let connector =
-            SqliteWarehouseConnector::new("t", "warehouse", file.path(), issuer.clone());
+        let connector = SqliteWarehouseConnector::new(
+            "t",
+            "warehouse",
+            file.path(),
+            issuer.clone(),
+            BTreeSet::from(["analytics".into()]),
+        );
         let identity = Identity {
             tenant_id: "t".into(),
             subject_id: "u".into(),
@@ -445,8 +452,13 @@ mod tests {
     async fn connector_events_are_durable_deduplicated_and_cursor_bounded() {
         let file = NamedTempFile::new().unwrap();
         let issuer = CapabilityIssuer::new([7_u8; 32]).unwrap();
-        let connector =
-            SqliteWarehouseConnector::new("t", "warehouse", file.path(), issuer.clone());
+        let connector = SqliteWarehouseConnector::new(
+            "t",
+            "warehouse",
+            file.path(),
+            issuer.clone(),
+            BTreeSet::from(["analytics".into()]),
+        );
         let first = connector
             .emit_change(
                 "table:payments",
@@ -466,7 +478,13 @@ mod tests {
         assert_eq!(duplicate.event_id, first.event_id);
 
         drop(connector);
-        let reopened = SqliteWarehouseConnector::new("t", "warehouse", file.path(), issuer);
+        let reopened = SqliteWarehouseConnector::new(
+            "t",
+            "warehouse",
+            file.path(),
+            issuer,
+            BTreeSet::from(["analytics".into()]),
+        );
         let page = reopened.subscribe(None).await.unwrap();
         assert_eq!(page.items, vec![first.clone()]);
         assert_eq!(page.next_cursor.as_deref(), Some(first.cursor.as_str()));
