@@ -1,14 +1,23 @@
 # AMOS Artifact Evaluation Guide
 
+> **Archived, non-executable evidence guide.** The Python evaluation package
+> referenced below is not present in the current Rust repository. The commands
+> are retained to explain how the frozen paper artifacts were produced; they
+> are not supported reproduction commands for the current checkout. Current
+> executable evidence and commands are recorded in
+> [`PRODUCT_READINESS.md`](../PRODUCT_READINESS.md).
+
 AMOS is an internally deployed analyst system that connects to company data
 and tools, answers business questions, performs verified analysis, and produces
 graphs, reports, and presentation slides. This guide evaluates the current
 memory and control kernel. It does not establish that the complete analyst
 product, local Gemma 4 integration, or artifact compiler is finished.
 
-This guide regenerates the evidence bundle used by the AMOS paper. The harness is offline-capable, isolates generated data from the source checkout, records failures per stage, and writes SHA-256 hashes for generated artifacts.
+Historically, this guide regenerated the evidence bundle used by the AMOS
+paper. The former harness isolated generated data from the source checkout,
+recorded failures per stage, and wrote SHA-256 hashes for generated artifacts.
 
-## Full reproduction
+## Historical reproduction procedure
 
 From the repository root:
 

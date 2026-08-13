@@ -1,5 +1,11 @@
 # AMOS Independent Evidence Intake
 
+> **Protocol retained; validators not currently executable.** The
+> `amos.evaluation` Python modules named in this document are absent from the
+> current Rust repository. These schemas and procedures remain the intended
+> independent-study contract, but the shown commands cannot be run until the
+> validators are restored or replaced and covered by CI.
+
 The target product is an internally deployed analyst system that connects to
 company data and tools, answers business questions, performs verified analysis,
 and produces graphs, reports, and presentation slides. Evidence intake must
