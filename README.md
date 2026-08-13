@@ -43,6 +43,16 @@ fixture, not the AMOS product definition.
 - [Design proposal](papers/AMOS_design_proposal.pdf): the product architecture and normative Specifications A–F.
 - [Product requirements](docs/PRODUCT_REQUIREMENTS.md): the canonical product
   outcome, Gemma 4 integration, artifact outputs, and release requirements.
+- [MVP execution plan](docs/MVP_EXECUTION_PLAN.md): the phased delivery path,
+  gates, and validation program.
+- [Phase 0 backlog](docs/PHASE_0_BACKLOG.md): the ordered repository-baseline
+  work, ownership placeholders, dependencies, and acceptance conditions.
+- [Architecture decisions](docs/adr/README.md): proposed and accepted records
+  for trust boundaries, durable contracts, and deployment topology.
+- [Configuration profiles](docs/CONFIGURATION_PROFILES.md): fail-closed
+  development, staging, pilot, and production environment boundaries.
+- [MVP risk register](docs/MVP_RISK_REGISTER.md): prioritized product,
+  correctness, security, deployment, support, and scope risks.
 - [Rust requirements matrix](docs/RUST_REQUIREMENTS_MATRIX.md): direct traceability from both papers to implementation modules.
 
 ## What the current control-layer implementation provides
@@ -75,7 +85,8 @@ These experiences led to our core insight: better models alone will not unlock A
 
 ## Quick start
 
-Install the stable Rust toolchain, then seed and run the local MVP:
+The repository pins its validated Rust toolchain in `rust-toolchain.toml`.
+Install Rust through `rustup`, then seed and run the local MVP:
 
 ```bash
 cargo run -- --demo seed
@@ -166,12 +177,16 @@ content returns `409 IDEMPOTENCY_CONFLICT`.
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets
-cargo test --all-targets --release
-cargo build --release
-cargo doc --no-deps
+cargo test --all-targets --all-features
+cargo test --all-targets --all-features --release
+cargo build --all-features --release
+RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features
+cargo audit
 AMOS_BENCH_MEMORY_ITEMS=10000 cargo bench --bench control_paths
 ```
+
+The `Rust baseline` GitHub Actions workflow runs these gates for pull requests
+and pushes to `main`.
 
 The Rust regression suite additionally exercises crash-at-every-checkpoint recovery, stale fences and policy epochs, migration tampering, cancellation/timeouts, incremental byte limits, outbox retry/dead-letter recovery, durable connector cursors, object-promotion lost acknowledgments, legal hold/erasure, opaque cursor pagination, request limits, and browser security headers.
 

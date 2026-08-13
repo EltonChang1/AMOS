@@ -1,5 +1,10 @@
 # AMOS Independent Evaluation Protocol
 
+> **Protocol status:** retained for future external studies. The Python intake
+> and scoring commands described near the end of this document are not present
+> in the current Rust repository and are therefore non-executable. They must be
+> restored or replaced, tested, and frozen before a new study uses them.
+
 ## Purpose
 
 AMOS is an internally deployed analyst system that connects to company data
@@ -198,9 +203,11 @@ The final submission artifact must contain:
 - scripts that regenerate every table and figure;
 - explicit mapping from each paper claim to source artifacts.
 
-## Repository Intake and Scoring Tools
+## Archived intake and scoring tool contract
 
-The repository implements the collection boundary described above:
+The historical Python repository implemented the collection boundary described
+above. The current Rust repository retains the contract and fixtures, but not
+these command implementations:
 
 - `python3 -m amos.evaluation.independent_task_evidence <manifest>` validates frozen holdout tasks, participant independence, sealed-reference hashes, split leakage, original annotations, adjudication, and strict task/domain gates;
 - the same command with `--predictions` scores task outcomes, evidence use, permissions, review obligations, provenance, replay, missing executions, latency, tokens, and cost over independent task units;
@@ -209,7 +216,9 @@ The repository implements the collection boundary described above:
 - `python3 -m amos.evaluation.paired_task_analysis <first> <second>` verifies identical task IDs and reports paired task-resampled intervals and exact McNemar tests;
 - `python3 -m amos.evaluation.external_product_evidence <manifest>` validates external deployment identity and raw evidence.
 
-See `docs/evaluation/evidence_intake.md` for manifest fields, prediction shapes, commands, and archival order. Passing repository unit tests proves the intake contract, not the existence or independence of the required human evidence.
+See `docs/evaluation/evidence_intake.md` for manifest fields, prediction shapes,
+historical commands, and archival order. Current Rust tests do not exercise
+these validators or prove the existence or independence of human evidence.
 
 ## Completion Gate
 

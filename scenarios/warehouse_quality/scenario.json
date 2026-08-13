@@ -2,9 +2,9 @@
   "pack_id": "warehouse_quality",
   "version": "2026.07.11",
   "domain": "warehouse operations analytics",
-  "status": "executable_product_eval",
+  "status": "archived_non_executable_evidence",
   "description": "Investigate fulfillment-quality regressions across inventory events, pick/pack defects, late scans, vendor restrictions, and dashboard update decisions.",
-  "supported_eval_commands": [
+  "historical_eval_commands": [
     "python3 -m amos.evaluation.product_eval --scenario warehouse_quality --variants 12 --samples 3 --variant-seed 20260711 --systems amos,agent_with_manual_policy_prompt,rag_with_permission_filter,agent_only,rag,semantic,catalog,long_context,amos_no_verifier,amos_no_permission_gate,amos_no_provenance"
   ],
   "assets": {

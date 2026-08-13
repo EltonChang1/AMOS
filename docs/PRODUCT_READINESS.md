@@ -2,7 +2,7 @@
 
 Status: **control-layer reference slice complete; full analyst product not ready**
 
-Evidence date: 2026-07-22
+Evidence date: 2026-08-12
 
 Release: `amos 0.2.0`
 
@@ -28,6 +28,9 @@ product.
   is deterministic and threshold-gated but is not a production capacity claim.
 - Generated demo databases, objects, proxy processes, and browser state were
   isolated outside the repository and removed after the walkthrough.
+- Historical Python evaluation results and scenario fixtures remain archived,
+  but the `amos.evaluation` command implementations are absent from this Rust
+  checkout. Those commands are not current executable evidence.
 
 ## Research-kernel contract
 
@@ -142,10 +145,11 @@ The following commands pass from the current checkout:
 ```text
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets
-cargo test --all-targets --release
-cargo build --release
-cargo doc --no-deps
+cargo test --all-targets --all-features
+cargo test --all-targets --all-features --release
+cargo build --all-features --release
+RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features
+cargo audit
 git diff --check
 AMOS_BENCH_MEMORY_ITEMS=10000 cargo bench --bench control_paths
 ```
@@ -154,6 +158,32 @@ Both debug and release profiles run 64 tests (31 library, 15 API/CLI/UI and 18
 end-to-end runtime tests), with zero failures or ignored tests. `--all-targets`
 also executes the control-path benchmark. The release benchmark used 10,000
 memory objects and passed every threshold.
+
+The repository pins Rust 1.97.0 in `rust-toolchain.toml`, and
+`.github/workflows/ci.yml` enforces the same gates for pull requests and pushes
+to `main`. The dependency audit scanned all 155 locked crate dependencies with
+no reported vulnerability on 2026-08-12.
+
+## Historical evaluation boundary
+
+The JSON and Markdown under `artifacts/evaluation/`, the three `scenarios/`
+packs, `evaluation_protocols/`, and the external-study templates are frozen or
+archived research evidence. They describe an earlier Python evaluation harness
+and remain useful for provenance and future study design. They do not prove
+that the current Rust product implements those evaluators, scenarios, or
+headline experiments.
+
+No Python source files, package metadata, or importable `amos.evaluation`
+modules exist in this checkout. Accordingly:
+
+- Python commands in the archived evaluation guides are historical procedures,
+  not supported current commands;
+- scenario manifests are marked `archived_non_executable_evidence` and retain
+  their former commands only as `historical_eval_commands`;
+- the frozen result files may be integrity-checked where sidecar hashes exist,
+  but they cannot currently be regenerated from source in this repository; and
+- a new independent study must first restore or replace its validators, put
+  them under CI, and freeze a newly reviewed protocol.
 
 ## Intentional boundaries and non-goals
 

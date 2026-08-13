@@ -1,5 +1,11 @@
 # AMOS External Study Handoff
 
+> **Do not begin a new study from this packet yet.** The Python validators in
+> the validation section are not present in the current Rust repository. This
+> handoff is retained as an archived protocol template; restore or replace the
+> validators, add CI coverage, and freeze a new reviewed protocol before
+> collecting participants or held-out data.
+
 AMOS is an internally deployed analyst system that connects to company data
 and tools, answers business questions, performs verified analysis, and produces
 graphs, reports, and presentation slides. The external study must test that
@@ -69,7 +75,7 @@ Use `templates/claim_manifest.template.json` only as a field guide.
 
 Use `templates/external_product_manifest.template.json` only as a field guide.
 
-## Validation Commands
+## Historical validation commands (currently unavailable)
 
 ```bash
 shasum -a 256 -c evaluation_protocols/pvldb_v20_preregistration.sha256
