@@ -1,9 +1,17 @@
 # AMOS MVP execution plan
 
-Status: **proposed execution baseline**
+Status: **active execution baseline — engineering foundation in progress; MVP
+not yet release-candidate or customer-validated**
 
 Planning horizon: **16 weeks to a validated MVP, followed by a 6–9 month
 repeatability and expansion phase**
+
+Implementation status last updated: **August 17, 2026**
+
+Evidence policy: implementation claims below refer to the current `MVP` branch
+working tree and locally verified behavior. They do not imply that changes have
+been reviewed, merged to `main`, exercised in a customer environment, or
+accepted by a paying design partner.
 
 This document sequences delivery. `docs/PRODUCT_REQUIREMENTS.md` remains the
 canonical product definition, `papers/AMOS_design_proposal.pdf` retains the
@@ -11,6 +19,103 @@ full technical architecture and control specifications, and
 `docs/PRODUCT_READINESS.md` records implementation evidence. If the documents
 conflict on product scope, update the canonical requirements and this plan in
 the same reviewed change.
+
+## 0. Implementation status snapshot
+
+### Executive summary
+
+AMOS has moved beyond a paper architecture. The current working tree contains
+an installable customer-evaluation application, authenticated API and operator
+CLI, durable governed-workflow primitives, review and evidence surfaces, and a
+manifest-driven tool SDK with real constrained executors for common data
+analysis and artifact tasks. The latest local verification covers 75 Rust tests
+and a catalog-wide smoke test of all 12 external toolbox executors.
+
+This is an **evaluation vertical slice**, not an MVP release candidate. The
+largest remaining blockers are commercial validation, removal of
+payment-specific product assumptions, one customer-selected production
+connector, a real provider-neutral model loop, complete verified artifact
+generation, enterprise infrastructure, and release/security qualification.
+The repository demonstrates technical feasibility; it does not yet demonstrate
+customer demand, production suitability, or a repeatable deployment.
+
+### Work completed or materially implemented
+
+| Area | Current evidence | Status and boundary |
+| --- | --- | --- |
+| Governed workflow core | A-TXN-style lifecycle, policy checks, evidence capture, claim verification, review, publication controls, invalidation/replay, recovery, cancellation, and audit reconstruction | Materially implemented for the local reference workflow; some logic remains payment-specific |
+| Application surfaces | Server-rendered inbox, workbench, review, and operations views; authenticated API; static-token configuration; health/readiness endpoints | Usable evaluation UI and API; enterprise identity and complete administrator workflows remain open |
+| Installable evaluation package | Non-root application and toolbox containers, Docker Compose topology, persisted volumes, secrets, health checks, installation script, preflight/configuration commands, backup, and diagnostics | Installable on a customer-controlled evaluation server; not yet a signed, hardened, upgradable production release |
+| Governed tool SDK | Strict manifest schema, registry, policy visibility, API/CLI discovery, capability-limited external transport, output validation, and documented extension contract | 15 catalog entries: 13 plan-step tools and two embedded deterministic tools |
+| Data-analysis executors | Read-only SQL plus constrained Spark, R, pandas, Polars, DuckDB, dbt-manifest validation, regression, forecast, PCA, XLSX, PPTX, and notebook-inspection executors | All 12 external executors pass real catalog-wide smoke execution; arbitrary Python/R/notebook execution is intentionally unsupported |
+| Artifact primitives | Deterministic SVG charts and constrained editable XLSX and PPTX generation | Useful compiler foundations; not yet a complete branded answer/report/presentation/data-appendix package |
+| Engineering verification | 75 Rust tests, formatting, Clippy, docs, dependency audit, container build, health smoke test, and tool catalog smoke test have passed locally | Strong local evidence; reviewed `main` CI and customer-environment evidence are still required |
+| Planning and operating artifacts | Phase 0 backlog, proposed ADRs, configuration profiles, risk register, product-readiness record, deployment guide, and governed-tool SDK guide | Useful baseline; ownership approval, license, security policy, and several release runbooks remain incomplete |
+
+Primary evidence lives in
+[`PRODUCT_READINESS.md`](PRODUCT_READINESS.md),
+[`GOVERNED_TOOL_SDK.md`](GOVERNED_TOOL_SDK.md), and
+[`deployment/CUSTOMER_EVALUATION_SERVER.md`](deployment/CUSTOMER_EVALUATION_SERVER.md).
+The executable catalog is in [`../tool-packs/`](../tool-packs/).
+
+### What has improved from the proposed baseline
+
+1. **The app is deployable for evaluation.** The plan originally described a
+   future package; the repository now builds separate control-plane and
+   constrained-toolbox images and supplies an operator installation path.
+2. **Tool contracts have real executors.** Data-agent capabilities are no
+   longer limited to SQL or placeholders. The catalog includes constrained
+   templates and executable paths for the principal MVP analysis categories,
+   with explicit schemas, limits, and failure behavior.
+3. **Authorization crosses the worker boundary.** External tool requests carry
+   tenant, subject, plan-step hash, limits, and expiry-bound capabilities, and
+   the toolbox independently validates inputs and outputs.
+4. **The local quality baseline is broader.** The Rust suite now contains 75
+   tests, CI covers debug and release testing plus linting, documentation,
+   dependency auditing, and benchmarks, and deployment/tool smoke commands can
+   exercise built artifacts.
+5. **Evaluation claims are more accurate.** Documentation now distinguishes
+   constrained analysis from arbitrary code execution and separates local
+   evaluation readiness from customer-validated production readiness.
+
+### Remaining gaps and required improvements
+
+| Priority | Gap | Existing foundation | Improvement required to close the MVP gate |
+| --- | --- | --- | --- |
+| P0 | No evidenced paid design partner or frozen workflow | Customer-discovery materials and scorecard drafts exist | Complete observations, sign the paid shadow-pilot agreement, record the buyer/source/workflow/decision date, and freeze the acceptance scorecard |
+| P0 | Phase 0 governance is incomplete | Backlog, CI workflow, ADR drafts, profiles, risk register, and readiness record exist | Assign named owners, approve scope, add a license and `SECURITY.md`, constrain or remove the payment demo, review ADRs, and make the reviewed `main` baseline green |
+| P0 | Core behavior remains payment-oriented | Strong governed transaction primitives exist | Move workflow, metric, query, review, and artifact behavior into a signed/versioned solution-pack contract and prove a second non-payment pack without core specialization |
+| P0 | No customer-selected production data source | Read-only SQLite/reference connector behavior and SQL policies exist | Build and certify exactly one demanded warehouse connector, including identity propagation, source-state tokens, schema change handling, quotas, retries, and revocation tests |
+| P0 | No real analyst model loop | Deterministic planning and verification boundaries exist | Implement the provider-neutral propose/validate/execute/interpret loop and evaluate it on frozen pilot tasks without giving the model credentials or direct tool access |
+| P1 | Artifact product is incomplete | SVG, XLSX, and PPTX primitives exist | Define the verified-result IR and compile the full direct answer, accessible charts, branded editable presentation, HTML/PDF report, and XLSX/CSV appendix with claim-level evidence links |
+| P1 | Application workflows are not end-to-end complete | Analyst, reviewer, and operator surfaces plus auth/API exist | Complete administrator setup, asynchronous job progress, scheduling, follow-up context, artifact review, publication acknowledgement, and unaided usability testing |
+| P1 | Evaluation infrastructure is not production infrastructure | Non-root containers, Compose, secrets files, persistence, health checks, backup, and diagnostics exist | Replace SQLite/static bearer tokens/local filesystem/shared execution pool with PostgreSQL, customer identity, managed secrets, durable queue/object storage, and risk-tiered workers where required |
+| P1 | Worker trust and isolation need hardening | Short-lived scoped HMAC capabilities, container limits, non-root users, read-only filesystem, and dropped capabilities exist | Prefer asymmetric capability verification, digest-pin and sign images, isolate higher-risk runtimes per invocation or risk pool, add sandbox-escape/adversarial tests, and document residual risk |
+| P1 | Release lifecycle is incomplete | Reproducible build inputs, Compose installation, backup, and diagnosis exist | Add SBOM/provenance, multi-architecture or selected-architecture qualification, offline bundle if required, restore/upgrade/rollback/export/uninstall drills, and supported-version policy |
+| P1 | Qualification evidence is local only | Automated tests, structured IDs, recovery paths, and local smoke tests exist | Run threat-model review, dependency and image scans, performance/failure injection, backup restore, upgrade/rollback, support drills, and external/customer-environment qualification |
+| P0 | No shadow-pilot evidence | Pilot sequence and scorecard are defined | Complete four consecutive weekly customer cycles, compare with the analyst baseline, resolve critical defects, and obtain an explicit production/renewal/expansion/no-go decision |
+
+### Phase status against this plan
+
+| Phase | Current status | Evidence-based interpretation |
+| --- | --- | --- |
+| 0. Program reset | **In progress** | Much of the engineering baseline exists, but named ownership, approval, license, security policy, demo constraint, and reviewed-main gates remain open |
+| 1. Paid pilot contract | **Not evidenced — critical blocker** | Discovery assets are present; no paid partner, ten observed runs, signed scope, or frozen scorecard is recorded |
+| 2. Solution-pack contract | **Partial foundation** | The governed tool-pack registry is reusable, but tool manifests are not the customer workflow/metric/template solution-pack contract required by this phase |
+| 3. Production connector | **Reference implementation only** | Local read-only connector behavior exists; no real customer service has passed conformance |
+| 4. Analyst model loop | **Not implemented** | Deterministic planning fixtures are useful test seams, not a production model provider and evaluated agent loop |
+| 5. Artifact product | **Partial** | Chart, XLSX, and PPTX executors exist; the complete verified-result IR and branded decision package do not |
+| 6. Application workflows | **Partial** | Four core surfaces and authenticated APIs exist; complete admin, async, schedule, follow-up, and publish flows remain |
+| 7. Production foundation | **Evaluation-only** | Container and configuration boundaries are useful, while PostgreSQL, enterprise identity, managed secrets, durable services, and production isolation remain open |
+| 8. Packaging | **Evaluation-only** | A customer can install and diagnose the evaluation build; signed release, restore, upgrade, rollback, and lifecycle qualification remain open |
+| 9. Qualification | **Partial local evidence** | Local tests and smokes are strong; security, recovery, performance, support, and customer-environment gates have not passed |
+| 10. Shadow pilot | **Not started** | Depends on Phases 1 and 9 |
+| 11. Readout | **Not started** | Depends on four completed, scored shadow cycles |
+
+No program milestone beyond local engineering feasibility should be marked
+complete yet. In particular, **M0 remains open** until the governance and
+reviewed-baseline gates pass, and **M1 through M5 remain open** until the
+commercial, customer, and production evidence required below exists.
 
 ## 1. Objective and definition of complete
 
@@ -1085,18 +1190,41 @@ negative customer evidence.
 
 ## 13. Immediate next ten actions
 
-1. Assign the five ownership roles and approve the MVP/non-goal boundary.
-2. Create the work-item tracker from this document and mark the critical path.
-3. Add CI, licensing, security policy, ADRs, and accurate archive labels.
-4. Begin the 30-account interview campaign and schedule ten workflow
-   observations.
-5. Draft the paid shadow-pilot statement of work and scorecard.
-6. Design the solution-pack and verified-result IR contracts.
-7. Refactor the payment runtime behind pack, connector, planner, and renderer
-   interfaces without weakening the current tests.
-8. Prototype the provider-neutral model loop and evaluate it on frozen tasks.
-9. Prototype editable PPTX plus report and data-appendix generation from the
-   verified-result IR.
-10. Once a paid partner selects the environment, implement that connector,
-    identity, deployment, and publication path and discard guessed integrations
-    from the MVP backlog.
+These actions replace the original startup list. They are ordered by the
+shortest path from the current evaluation foundation to a validated MVP.
+
+1. **Close Phase 0 decisions:** assign the five owners, approve the MVP and
+   non-goal boundary, select licensing, add `SECURITY.md`, review the proposed
+   ADRs, and formally constrain the payment demo.
+2. **Create a reviewed engineering baseline:** split the current `MVP` working
+   tree into reviewable commits, run the complete CI and container/tool smoke
+   suite, merge an approved baseline to `main`, and update
+   `PRODUCT_READINESS.md` with the resulting commit and CI evidence.
+3. **Execute the demand gate:** run the 30-account outreach, observe at least ten
+   real workflow executions, and sign one paid shadow-pilot statement of work
+   with source, identity, publication, security, success metric, and decision
+   date fixed.
+4. **Freeze the first solution pack:** encode the selected workflow, metrics,
+   approved query shapes, review rules, artifact templates, and evaluations in
+   a versioned signed pack; use a second synthetic pack to prove the core is not
+   payment-specific.
+5. **Implement and evaluate the model loop:** connect a customer-approved model
+   through `ModelProvider`, then measure plan validity, unsupported-claim rate,
+   correction rate, latency, and cost on frozen pilot tasks.
+6. **Build the one demanded connector:** implement the customer-selected
+   read-only source only after the partner freezes it, and pass the full
+   identity, policy, source-state, retry, quota, schema-change, and revocation
+   conformance suite.
+7. **Define verified-result and artifact contracts:** make every narrative,
+   table, chart, slide, report section, and appendix cell derive from typed
+   verified results with evidence and freshness references.
+8. **Complete the operator and user journey:** implement administrator setup,
+   asynchronous progress, scheduling, follow-up, artifact review, idempotent
+   publication, and lifecycle reconstruction as one unaided workflow.
+9. **Promote evaluation packaging to a qualified release:** add PostgreSQL,
+   enterprise identity, managed secrets, durable queue/storage, risk-tiered
+   workers, signed digest-pinned images, SBOM/provenance, and tested
+   install/backup/restore/upgrade/rollback/export/uninstall paths.
+10. **Qualify and run the pilot:** pass security, recovery, performance, and
+    support gates in the customer environment; then complete four scored weekly
+    shadow cycles and hold the explicit commercial readout.

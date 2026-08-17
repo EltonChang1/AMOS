@@ -14,12 +14,29 @@ use crate::{
         PlanStep, TaskDefinition, VerificationCheck, VerificationRecord, content_hash, stable_id,
     },
     policy::PolicyEngine,
+    tools::ToolRegistry,
     workers::ChartWorker,
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Verifier {
     policy: PolicyEngine,
+    tools: ToolRegistry,
+}
+
+impl Default for Verifier {
+    fn default() -> Self {
+        Self::new(ToolRegistry::builtins().expect("built-in tool manifests must be valid"))
+    }
+}
+
+impl Verifier {
+    pub fn new(tools: ToolRegistry) -> Self {
+        Self {
+            policy: PolicyEngine,
+            tools,
+        }
+    }
 }
 
 pub struct ClaimVerificationRequest<'a> {
@@ -45,6 +62,8 @@ impl Verifier {
         let mut checks = vec![];
         let mut warnings = vec![];
         let mut errors = vec![];
+        let tool_manifest = self.tools.get(&step.tool).ok();
+        let requires_relations = tool_manifest.is_none_or(|tool| tool.source_policy.required);
         let declared_relations = step
             .parameters
             .get("relations")
@@ -64,7 +83,7 @@ impl Verifier {
         record(
             &mut checks,
             "STEP_RELATIONS",
-            relations_are_valid
+            (!requires_relations || relations_are_valid)
                 .then_some(())
                 .ok_or_else(|| "step must declare a non-empty string relation list".into()),
             &mut errors,
@@ -77,221 +96,234 @@ impl Verifier {
                 .map_err(|e| e.to_string()),
             &mut errors,
         );
-        let sql = step
-            .parameters
-            .get("sql")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        let parsed = Parser::parse_sql(&GenericDialect {}, sql);
-        let read_only = parsed
-            .as_ref()
-            .map(|statements| {
-                statements.len() == 1
-                    && statements.first().is_some_and(|statement| {
-                        matches!(statement, sqlparser::ast::Statement::Query(_))
-                    })
-            })
-            .unwrap_or(false);
         record(
             &mut checks,
-            "SQL_READ_ONLY",
-            if read_only {
-                Ok(())
-            } else {
-                Err("only one read-only SELECT is allowed".into())
-            },
+            "TOOL_CONTRACT",
+            self.tools
+                .validate_step(step)
+                .map_err(|error| error.to_string()),
             &mut errors,
         );
-        if let Err(ref error) = parsed {
-            errors.push(format!("SQL parse failed: {error}"));
-        }
-
-        let normalized = normalize(sql);
-        let schemas: Vec<_> = manifest
-            .selected_objects
-            .iter()
-            .filter(|object| matches!(object.memory_type, crate::domain::MemoryType::Schema))
-            .collect();
-        let mut references = SchemaReferences::default();
-        if let Ok(statements) = &parsed
-            && statements.visit(&mut references).is_break()
+        let mut permitted_repair = None;
+        if tool_manifest
+            .is_some_and(|tool| matches!(tool.runtime.kind, crate::tools::ToolRuntimeKind::Sql))
         {
-            errors.push("SQL schema reference traversal stopped unexpectedly".into());
-        }
-        let allowed_functions =
-            BTreeSet::from(["count".to_string(), "substr".to_string(), "sum".to_string()]);
-        let unsupported_functions = references
-            .functions
-            .difference(&allowed_functions)
-            .cloned()
-            .collect::<Vec<_>>();
-        record(
-            &mut checks,
-            "SQL_SUPPORTED_SUBSET",
-            if sql.len() > 32 * 1024
-                || references.has_join
-                || references.has_cte
-                || references.has_set_operation
-                || references.has_subquery
-                || !unsupported_functions.is_empty()
-            {
-                Err(format!(
-                    "query uses unsupported SQL structure or functions: {}",
-                    unsupported_functions.join(",")
-                ))
-            } else {
-                Ok(())
-            },
-            &mut errors,
-        );
-        let allowed_tables: BTreeSet<_> = schemas
-            .iter()
-            .filter_map(|schema| schema.content.get("table").and_then(|value| value.as_str()))
-            .map(str::to_lowercase)
-            .collect();
-        let allowed_columns: BTreeSet<_> = schemas
-            .iter()
-            .flat_map(|schema| {
-                schema
-                    .content
-                    .get("columns")
-                    .and_then(|value| value.as_array())
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|value| value.as_str())
-            })
-            .map(str::to_lowercase)
-            .collect();
-        let permitted_repair = schemas.iter().find_map(|schema| {
-            schema
-                .content
-                .get("renamed_columns")?
-                .as_object()?
-                .iter()
-                .find_map(|(old, new)| {
-                    new.as_str()
-                        .filter(|replacement| !replacement.trim().is_empty())
-                        .filter(|_| normalized.contains(&normalize(old)))
-                        .map(|replacement| format!("COLUMN_SUPERSEDED:{old}:{replacement}"))
-                })
-        });
-        let unknown_table = references
-            .relations
-            .iter()
-            .find(|table| !allowed_tables.contains(*table));
-        record(
-            &mut checks,
-            "SCHEMA_TABLES",
-            unknown_table.map_or(Ok(()), |table| Err(format!("unknown table: {table}"))),
-            &mut errors,
-        );
-        let payment_events_used = references.relations.contains("payment_events");
-        record(
-            &mut checks,
-            "SQL_TIME_BOUNDS",
-            if !payment_events_used
-                || (references.has_time_lower_bound && references.has_time_upper_bound)
-            {
-                Ok(())
-            } else {
-                Err(
-                    "payment_events queries require parsed lower and upper event_time bounds"
-                        .into(),
-                )
-            },
-            &mut errors,
-        );
-        let unknown_column =
-            references
-                .identifiers
-                .difference(&references.aliases)
-                .find(|column| {
-                    !allowed_columns.contains(*column)
-                        && !permitted_repair.as_deref().is_some_and(|repair| {
-                            repair.starts_with(&format!("COLUMN_SUPERSEDED:{column}:"))
+            let sql = step
+                .parameters
+                .get("sql")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let parsed = Parser::parse_sql(&GenericDialect {}, sql);
+            let read_only = parsed
+                .as_ref()
+                .map(|statements| {
+                    statements.len() == 1
+                        && statements.first().is_some_and(|statement| {
+                            matches!(statement, sqlparser::ast::Statement::Query(_))
                         })
-                });
-        record(
-            &mut checks,
-            "SCHEMA_COLUMNS",
-            unknown_column.map_or(Ok(()), |column| {
-                Err(format!("unknown or superseded column: {column}"))
-            }),
-            &mut errors,
-        );
-        let blocked: Vec<_> = schemas
-            .iter()
-            .flat_map(|schema| {
+                })
+                .unwrap_or(false);
+            record(
+                &mut checks,
+                "SQL_READ_ONLY",
+                if read_only {
+                    Ok(())
+                } else {
+                    Err("only one read-only SELECT is allowed".into())
+                },
+                &mut errors,
+            );
+            if let Err(ref error) = parsed {
+                errors.push(format!("SQL parse failed: {error}"));
+            }
+
+            let normalized = normalize(sql);
+            let schemas: Vec<_> = manifest
+                .selected_objects
+                .iter()
+                .filter(|object| matches!(object.memory_type, crate::domain::MemoryType::Schema))
+                .collect();
+            let mut references = SchemaReferences::default();
+            if let Ok(statements) = &parsed
+                && statements.visit(&mut references).is_break()
+            {
+                errors.push("SQL schema reference traversal stopped unexpectedly".into());
+            }
+            let allowed_functions =
+                BTreeSet::from(["count".to_string(), "substr".to_string(), "sum".to_string()]);
+            let unsupported_functions = references
+                .functions
+                .difference(&allowed_functions)
+                .cloned()
+                .collect::<Vec<_>>();
+            record(
+                &mut checks,
+                "SQL_SUPPORTED_SUBSET",
+                if sql.len() > 32 * 1024
+                    || references.has_join
+                    || references.has_cte
+                    || references.has_set_operation
+                    || references.has_subquery
+                    || !unsupported_functions.is_empty()
+                {
+                    Err(format!(
+                        "query uses unsupported SQL structure or functions: {}",
+                        unsupported_functions.join(",")
+                    ))
+                } else {
+                    Ok(())
+                },
+                &mut errors,
+            );
+            let allowed_tables: BTreeSet<_> = schemas
+                .iter()
+                .filter_map(|schema| schema.content.get("table").and_then(|value| value.as_str()))
+                .map(str::to_lowercase)
+                .collect();
+            let allowed_columns: BTreeSet<_> = schemas
+                .iter()
+                .flat_map(|schema| {
+                    schema
+                        .content
+                        .get("columns")
+                        .and_then(|value| value.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|value| value.as_str())
+                })
+                .map(str::to_lowercase)
+                .collect();
+            permitted_repair = schemas.iter().find_map(|schema| {
                 schema
                     .content
-                    .get("blocked_columns")
-                    .and_then(|v| v.as_array())
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|v| v.as_str())
-            })
-            .collect();
-        let blocked_used = blocked
-            .iter()
-            .find(|column| normalized.contains(&normalize(column)));
-        record(
-            &mut checks,
-            "SCHEMA_BLOCKED_COLUMNS",
-            blocked_used.map_or(Ok(()), |column| {
-                Err(format!("blocked column referenced: {column}"))
-            }),
-            &mut errors,
-        );
-        let metrics: Vec<_> = manifest
-            .selected_objects
-            .iter()
-            .filter(|object| {
+                    .get("renamed_columns")?
+                    .as_object()?
+                    .iter()
+                    .find_map(|(old, new)| {
+                        new.as_str()
+                            .filter(|replacement| !replacement.trim().is_empty())
+                            .filter(|_| normalized.contains(&normalize(old)))
+                            .map(|replacement| format!("COLUMN_SUPERSEDED:{old}:{replacement}"))
+                    })
+            });
+            let unknown_table = references
+                .relations
+                .iter()
+                .find(|table| !allowed_tables.contains(*table));
+            record(
+                &mut checks,
+                "SCHEMA_TABLES",
+                unknown_table.map_or(Ok(()), |table| Err(format!("unknown table: {table}"))),
+                &mut errors,
+            );
+            let payment_events_used = references.relations.contains("payment_events");
+            record(
+                &mut checks,
+                "SQL_TIME_BOUNDS",
+                if !payment_events_used
+                    || (references.has_time_lower_bound && references.has_time_upper_bound)
+                {
+                    Ok(())
+                } else {
+                    Err(
+                        "payment_events queries require parsed lower and upper event_time bounds"
+                            .into(),
+                    )
+                },
+                &mut errors,
+            );
+            let unknown_column =
+                references
+                    .identifiers
+                    .difference(&references.aliases)
+                    .find(|column| {
+                        !allowed_columns.contains(*column)
+                            && !permitted_repair.as_deref().is_some_and(|repair| {
+                                repair.starts_with(&format!("COLUMN_SUPERSEDED:{column}:"))
+                            })
+                    });
+            record(
+                &mut checks,
+                "SCHEMA_COLUMNS",
+                unknown_column.map_or(Ok(()), |column| {
+                    Err(format!("unknown or superseded column: {column}"))
+                }),
+                &mut errors,
+            );
+            let blocked: Vec<_> = schemas
+                .iter()
+                .flat_map(|schema| {
+                    schema
+                        .content
+                        .get("blocked_columns")
+                        .and_then(|v| v.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str())
+                })
+                .collect();
+            let blocked_used = blocked
+                .iter()
+                .find(|column| normalized.contains(&normalize(column)));
+            record(
+                &mut checks,
+                "SCHEMA_BLOCKED_COLUMNS",
+                blocked_used.map_or(Ok(()), |column| {
+                    Err(format!("blocked column referenced: {column}"))
+                }),
+                &mut errors,
+            );
+            let metrics: Vec<_> = manifest
+                .selected_objects
+                .iter()
+                .filter(|object| {
+                    matches!(
+                        object.memory_type,
+                        crate::domain::MemoryType::SemanticDefinition
+                    )
+                })
+                .collect();
+            let missing_filter = metrics
+                .iter()
+                .flat_map(|metric| {
+                    metric
+                        .content
+                        .get("required_filters")
+                        .and_then(|v| v.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str())
+                })
+                .find(|filter| !normalized.contains(&normalize(filter)));
+            record(
+                &mut checks,
+                "METRIC_FILTERS",
+                missing_filter.map_or(Ok(()), |filter| {
+                    Err(format!("required metric filter missing: {filter}"))
+                }),
+                &mut errors,
+            );
+            for state in manifest.selected_objects.iter().filter(|object| {
                 matches!(
                     object.memory_type,
-                    crate::domain::MemoryType::SemanticDefinition
+                    crate::domain::MemoryType::DataState | crate::domain::MemoryType::StreamState
                 )
-            })
-            .collect();
-        let missing_filter = metrics
-            .iter()
-            .flat_map(|metric| {
-                metric
+            }) {
+                if let Some(warning) = state
                     .content
-                    .get("required_filters")
-                    .and_then(|v| v.as_array())
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|v| v.as_str())
-            })
-            .find(|filter| !normalized.contains(&normalize(filter)));
-        record(
-            &mut checks,
-            "METRIC_FILTERS",
-            missing_filter.map_or(Ok(()), |filter| {
-                Err(format!("required metric filter missing: {filter}"))
-            }),
-            &mut errors,
-        );
-        for state in manifest.selected_objects.iter().filter(|object| {
-            matches!(
-                object.memory_type,
-                crate::domain::MemoryType::DataState | crate::domain::MemoryType::StreamState
-            )
-        }) {
-            if let Some(warning) = state
-                .content
-                .get("freshness_warning")
-                .and_then(|v| v.as_str())
-            {
-                warnings.push(warning.into());
+                    .get("freshness_warning")
+                    .and_then(|v| v.as_str())
+                {
+                    warnings.push(warning.into());
+                }
             }
-        }
-        if permitted_repair.is_some() {
-            checks.push(VerificationCheck {
-                rule_id: "COLUMN_SUPERSEDED".into(),
-                outcome: Outcome::Repair,
-                message: permitted_repair.clone(),
-            });
+            if permitted_repair.is_some() {
+                checks.push(VerificationCheck {
+                    rule_id: "COLUMN_SUPERSEDED".into(),
+                    outcome: Outcome::Repair,
+                    message: permitted_repair.clone(),
+                });
+            }
         }
         let outcome = if !errors.is_empty() {
             Outcome::Reject

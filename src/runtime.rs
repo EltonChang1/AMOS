@@ -35,8 +35,9 @@ use crate::{
     scheduler::Scheduler,
     seed::{SOURCE, SPIKE_START, TENANT, WINDOW_END, WINDOW_START},
     store::Store,
+    tools::{ToolCatalogEntry, ToolImplementation, ToolManifest, ToolRegistry},
     verification::{ClaimVerificationRequest, Verifier},
-    workers::{CapabilityIssuer, ChartWorker, SqlWorker, StatisticsWorker},
+    workers::{CapabilityIssuer, ChartWorker, SqlWorker, StatisticsWorker, ToolboxWorker},
 };
 
 #[derive(Clone)]
@@ -44,6 +45,7 @@ pub struct RuntimeConfig {
     pub control_db: PathBuf,
     pub warehouse_db: PathBuf,
     pub object_root: PathBuf,
+    pub toolbox_endpoint: Option<String>,
     capability_key: Vec<u8>,
 }
 
@@ -54,6 +56,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("control_db", &self.control_db)
             .field("warehouse_db", &self.warehouse_db)
             .field("object_root", &self.object_root)
+            .field("toolbox_endpoint", &self.toolbox_endpoint)
             .field("capability_key", &"[REDACTED]")
             .finish()
     }
@@ -75,6 +78,7 @@ impl RuntimeConfig {
             control_db,
             warehouse_db,
             object_root,
+            toolbox_endpoint: None,
             capability_key: capability_key.into(),
         }
     }
@@ -85,6 +89,16 @@ impl RuntimeConfig {
             root.as_ref().join("data/payments.sqlite"),
             b"amos-explicit-demo-capability-key-v1".to_vec(),
         )
+    }
+
+    pub fn with_object_root(mut self, object_root: impl Into<PathBuf>) -> Self {
+        self.object_root = object_root.into();
+        self
+    }
+
+    pub fn with_toolbox_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.toolbox_endpoint = Some(endpoint.into());
+        self
     }
 }
 
@@ -97,8 +111,10 @@ pub struct AmosRuntime {
     policy: PolicyEngine,
     context: ContextCompiler,
     verifier: Verifier,
+    tools: ToolRegistry,
     connector: Arc<dyn Connector>,
     sql_worker: SqlWorker,
+    toolbox_worker: Option<ToolboxWorker>,
     capability_issuer: CapabilityIssuer,
     statistics: StatisticsWorker,
     charts: ChartWorker,
@@ -141,6 +157,7 @@ impl AmosRuntime {
         let evidence = EvidenceService::new(store.clone(), policy.clone());
         let context = ContextCompiler::new(memory.clone());
         let issuer = CapabilityIssuer::new(config.capability_key)?;
+        let tools = ToolRegistry::builtins()?;
         let connector = Arc::new(SqliteWarehouseConnector::new(
             TENANT,
             SOURCE,
@@ -148,6 +165,10 @@ impl AmosRuntime {
             issuer.clone(),
         ));
         let sql_worker = SqlWorker::new(&config.warehouse_db, issuer.clone());
+        let toolbox_worker = config
+            .toolbox_endpoint
+            .map(|endpoint| ToolboxWorker::new(endpoint, issuer.clone()))
+            .transpose()?;
         let object_store = LocalFilesystemObjectStore::new(&config.object_root)?;
         Ok(Self {
             store,
@@ -156,9 +177,11 @@ impl AmosRuntime {
             scheduler,
             policy,
             context,
-            verifier: Verifier::default(),
+            verifier: Verifier::new(tools.clone()),
+            tools,
             connector,
             sql_worker,
+            toolbox_worker,
             capability_issuer: issuer,
             statistics: StatisticsWorker,
             charts: ChartWorker,
@@ -170,6 +193,45 @@ impl AmosRuntime {
 
     pub fn metrics(&self) -> MetricsSnapshot {
         self.metrics.snapshot()
+    }
+
+    pub fn tool_manifests(&self) -> Vec<&ToolManifest> {
+        self.tools.list()
+    }
+
+    pub fn tool_catalog(&self) -> Vec<ToolCatalogEntry> {
+        self.tools.catalog()
+    }
+
+    fn execute_plan_step(
+        &self,
+        identity: &Identity,
+        plan: &TypedPlan,
+        step: &PlanStep,
+        fence: u64,
+    ) -> Result<ExecutionRecord> {
+        self.tools.validate_step(step)?;
+        let manifest = self.tools.get(&step.tool)?;
+        let capability = self
+            .capability_issuer
+            .issue_for_tool(identity, plan, step, fence, manifest)?;
+        let execution = match self.tools.implementation(&step.tool)? {
+            ToolImplementation::SqlReadOnly => {
+                self.sql_worker
+                    .execute(identity, plan, step, &capability, fence)
+            }
+            ToolImplementation::ExternalToolbox => self
+                .toolbox_worker
+                .as_ref()
+                .ok_or_else(|| {
+                    AmosError::Execution(
+                        "the governed toolbox worker is not configured for this deployment".into(),
+                    )
+                })?
+                .execute(identity, plan, step, manifest, &capability, fence),
+        }?;
+        manifest.validate_output(&execution.output)?;
+        Ok(execution)
     }
 
     pub(crate) async fn execute_blocking<T, F>(&self, operation: F) -> Result<T>
@@ -424,6 +486,8 @@ impl AmosRuntime {
             .store
             .get_task_definition(&identity.tenant_id, "payment_health_review")?
             .ok_or_else(|| AmosError::NotFound("payment_health_review task definition".into()))?;
+        self.tools
+            .validate_allowed_tools(&definition.allowed_tools)?;
         self.policy.authorize_task(identity, &definition)?;
         let request_hash = content_hash(
             &json!({"request":request,"task":definition.task_type,"version":definition.version}),
@@ -532,10 +596,7 @@ impl AmosRuntime {
         let fence = atxn.state_seq;
         let mut executions = vec![];
         for step in &plan.steps {
-            let capability = self.capability_issuer.issue(identity, &plan, step, fence)?;
-            let execution = self
-                .sql_worker
-                .execute(identity, &plan, step, &capability, fence)?;
+            let execution = self.execute_plan_step(identity, &plan, step, fence)?;
             let execution = self.store.save_execution(&execution)?;
             executions.push(execution);
         }
@@ -741,6 +802,8 @@ impl AmosRuntime {
                     atxn.task_type, atxn.task_version
                 ))
             })?;
+        self.tools
+            .validate_allowed_tools(&definition.allowed_tools)?;
         self.policy.authorize_task(identity, &definition)?;
         let mut prepared = None;
         loop {
@@ -877,16 +940,8 @@ impl AmosRuntime {
                         }) {
                             continue;
                         }
-                        let capability =
-                            self.capability_issuer
-                                .issue(identity, &plan, step, atxn.state_seq)?;
-                        let execution = self.sql_worker.execute(
-                            identity,
-                            &plan,
-                            step,
-                            &capability,
-                            atxn.state_seq,
-                        )?;
+                        let execution =
+                            self.execute_plan_step(identity, &plan, step, atxn.state_seq)?;
                         self.store.save_execution(&execution)?;
                     }
                     atxn = self.advance(&atxn, AtxnState::Composing, None)?;
@@ -1330,12 +1385,7 @@ impl AmosRuntime {
                         step.step_id
                     ))
                 })?;
-            let capability = self
-                .capability_issuer
-                .issue(identity, &replay_plan, step, fence)?;
-            let replayed =
-                self.sql_worker
-                    .execute(identity, &replay_plan, step, &capability, fence)?;
+            let replayed = self.execute_plan_step(identity, &replay_plan, step, fence)?;
             let replayed = self.store.save_execution(&replayed)?;
             let (comparison, explanation) = if expected == &replayed.output_hash {
                 matching.push(replayed.execution_id.clone());
@@ -2027,12 +2077,37 @@ impl AmosRuntime {
             .iter()
             .find(|r| r.get("period").and_then(|v| v.as_str()) == Some("baseline"))
             .ok_or_else(|| AmosError::Execution("baseline period missing".into()))?;
+        let comparison_parameters = json!({
+            "current_failures": required_u64(current, "failures", "current summary")?,
+            "current_total": required_u64(current, "attempts", "current summary")?,
+            "baseline_failures": required_u64(baseline, "failures", "baseline summary")?,
+            "baseline_total": required_u64(baseline, "attempts", "baseline summary")?,
+        });
+        let statistics_manifest = self.tools.get("stats.rate_comparison.v1")?;
+        statistics_manifest.validate_parameters(&comparison_parameters)?;
         let comparison = self.statistics.rate_comparison(
-            required_u64(current, "failures", "current summary")?,
-            required_u64(current, "attempts", "current summary")?,
-            required_u64(baseline, "failures", "baseline summary")?,
-            required_u64(baseline, "attempts", "baseline summary")?,
+            required_u64(
+                &comparison_parameters,
+                "current_failures",
+                "rate comparison parameters",
+            )?,
+            required_u64(
+                &comparison_parameters,
+                "current_total",
+                "rate comparison parameters",
+            )?,
+            required_u64(
+                &comparison_parameters,
+                "baseline_failures",
+                "rate comparison parameters",
+            )?,
+            required_u64(
+                &comparison_parameters,
+                "baseline_total",
+                "rate comparison parameters",
+            )?,
         )?;
+        statistics_manifest.validate_output(&comparison)?;
         let current_rate = required_f64(&comparison, "current_rate", "rate comparison")?;
         let baseline_rate = required_f64(&comparison, "baseline_rate", "rate comparison")?;
         let concentration = find_execution(executions, "concentration")?;
@@ -2058,7 +2133,18 @@ impl AmosRuntime {
         let processor = required_str(top, "processor", "concentration row")?;
         let card_network = required_str(top, "card_network", "concentration row")?;
         let concentration_rate = required_f64(top, "failure_rate", "concentration row")?;
+        let chart_manifest = self.tools.get("chart.timeseries.v1")?;
+        chart_manifest.validate_parameters(&json!({
+            "points": points
+                .iter()
+                .map(|(label, value)| json!({"label": label, "value": value}))
+                .collect::<Vec<_>>()
+        }))?;
         let (svg, chart_hash) = self.charts.timeseries_svg(&points)?;
+        chart_manifest.validate_output(&json!({
+            "svg": &svg,
+            "content_hash": &chart_hash
+        }))?;
         let artifact_id = stable_id("art", &(&atxn.tenant_id, &atxn.atxn_id, "report:v3"))?;
         let report = format!(
             "# Payment failure health review\n\nFailure rate increased from {:.1}% to {:.1}%. The largest concentration was {} / {} at {:.1}%. A gateway deployment preceded the spike, but causality and the dashboard action require review.\n\nChart hash: `{}`\n\n{}",

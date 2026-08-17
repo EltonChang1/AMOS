@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "tool_id": "stats.regression.v1",
+  "display_name": "Linear regression",
+  "description": "Fits a deterministic ordinary least-squares regression to bounded numeric arrays.",
+  "availability": "plan_step", "evaluation_only": true,
+  "runtime": { "kind": "python", "audience": "stats-worker", "entrypoint": "toolbox:regression", "image_digest": null },
+  "operations": ["analyze"],
+  "source_policy": { "required": false, "read_only": true, "relations_parameter": null },
+  "parameter_schema": { "type": "object", "properties": {
+    "x": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 128 }, "minItems": 2, "maxItems": 50000 },
+    "y": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 50000 }
+  }, "required": ["x", "y"], "additionalProperties": false },
+  "output_schema": { "type": "object", "properties": {
+    "intercept": { "type": "number" }, "coefficients": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 128 },
+    "r_squared": { "type": "number" }, "rmse": { "type": "number", "minimum": 0 }, "row_count": { "type": "integer", "minimum": 2 }
+  }, "required": ["intercept", "coefficients", "r_squared", "rmse", "row_count"], "additionalProperties": false },
+  "resource_limits": { "max_seconds": 120, "max_rows": 50000, "max_bytes": 10000000, "max_memory_mb": 2048 },
+  "network_policy": "deny_all",
+  "determinism": { "deterministic": true, "seed_parameter": null, "records_runtime_version": true },
+  "verifier_profile": "stats.regression.v1"
+}

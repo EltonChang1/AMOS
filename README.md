@@ -53,6 +53,11 @@ fixture, not the AMOS product definition.
   development, staging, pilot, and production environment boundaries.
 - [MVP risk register](docs/MVP_RISK_REGISTER.md): prioritized product,
   correctness, security, deployment, support, and scope risks.
+- [Governed Tool SDK](docs/GOVERNED_TOOL_SDK.md): strict tool manifests,
+  capability-bound executors, registry validation, and the analyst-tool catalog.
+- [Design-partner discovery](docs/customer_discovery/README.md): Phase 1
+  campaign, workflow-observation, qualification, scorecard, SOW, and security
+  review artifacts.
 - [Rust requirements matrix](docs/RUST_REQUIREMENTS_MATRIX.md): direct traceability from both papers to implementation modules.
 
 ## What the current control-layer implementation provides
@@ -93,10 +98,25 @@ cargo run -- --demo seed
 cargo run -- --demo serve
 ```
 
-The bundled binary is fail-closed unless `--demo` (or `AMOS_DEMO=true`) is
-explicitly set. The demo uses a named demo signing key and static local
-identities; embedding applications must construct `RuntimeConfig::new` with
-their own capability secret and pass an `IdentityProvider` to `api::router`.
+## Installable customer-evaluation server
+
+AMOS now includes a non-root OCI image, hardened Docker Compose package,
+mounted-secret configuration, persistent storage, health checks, diagnostics,
+and stopped-service backup for installing the current reference application on
+a customer-controlled Linux server. See the
+[customer-evaluation server guide](docs/deployment/CUSTOMER_EVALUATION_SERVER.md).
+
+This distribution is explicitly an evaluation topology. It includes a
+separate, network-isolated analyst toolbox container, but does not claim the
+PostgreSQL, enterprise identity, production connector, per-risk worker pool,
+model server, signed-image, or recovery qualifications required for a
+production pilot.
+
+The bundled binary is fail-closed unless either `--demo` (or `AMOS_DEMO=true`)
+is explicitly set or a validated server configuration is supplied with
+`--config` (or `AMOS_CONFIG`). The demo uses a named demo signing key and static
+local identities; configured deployments load an installation-specific
+capability secret and a hashed identity manifest.
 
 Every API and UI route except `/health` and `/v1/openapi.json` requires an explicit bearer identity.
 For example:
@@ -211,10 +231,10 @@ count.
 
 ## Current implementation boundary
 
-The target product includes a customer-local analyst agent and deterministic
-generation of graphs, reports, slides, dashboards, and spreadsheets. Those
-features are required by `docs/PRODUCT_REQUIREMENTS.md` but are not yet present
-in the current Rust slice. General Python execution, arbitrary production
+The toolbox now includes constrained XLSX and PPTX compilers and bounded
+analytical executors, but the customer-branded end-to-end artifact product and
+local analyst model loop are not yet integrated into the reference workflow.
+General Python execution, arbitrary production
 writes, unrestricted notebook code, general multi-agent scheduling, unreviewed
 causal claims, and autonomous external communication remain outside the first
 release.

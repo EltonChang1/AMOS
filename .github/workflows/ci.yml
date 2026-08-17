@@ -93,3 +93,57 @@ jobs:
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  container:
+    name: Build customer-evaluation image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Validate Compose model
+        run: docker compose --env-file deploy/compose/.env.example -f deploy/compose/compose.yaml config
+      - name: Build locked non-root image
+        run: docker build --build-arg AMOS_VERSION=0.2.0 --tag amos:ci .
+      - name: Build governed analyst toolbox image
+        run: docker build --file toolbox/Dockerfile --tag amos-toolbox:ci .
+      - name: Inspect configured image user and entrypoint
+        run: |
+          test "$(docker image inspect amos:ci --format '{{.Config.User}}')" = "10001:10001"
+          test "$(docker image inspect amos:ci --format '{{join .Config.Entrypoint " "}}')" = "/usr/local/bin/amos"
+          test "$(docker image inspect amos-toolbox:ci --format '{{.Config.User}}')" = "10002:10002"
+      - name: Validate packaged governed-tool catalog and templates
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/amosctl amos:ci tools list | grep -q 'spark.dataframe.aggregate.v1'
+          docker run --rm --entrypoint /usr/local/bin/amosctl amos:ci tools list | grep -q 'presentation.pptx.v1'
+          docker run --rm \
+            --entrypoint /usr/local/bin/amosctl \
+            --volume "${{ github.workspace }}/tool-packs/templates:/manifests:ro" \
+            amos:ci tools validate \
+            --manifest /manifests/spark.dataframe.aggregate.v1.json \
+            --manifest /manifests/r.statistics.v1.json
+      - name: Exercise every governed toolbox executable
+        run: |
+          openssl rand -hex 32 > /tmp/amos-ci-capability-key
+          chmod 644 /tmp/amos-ci-capability-key
+          docker network create amos-toolbox-ci
+          trap 'docker rm -f amos-toolbox-ci >/dev/null 2>&1 || true; docker network rm amos-toolbox-ci >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name amos-toolbox-ci \
+            --network amos-toolbox-ci \
+            --mount type=bind,source=/tmp/amos-ci-capability-key,target=/run/secrets/capability_key,readonly \
+            amos-toolbox:ci
+          attempt=0
+          until docker exec amos-toolbox-ci python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=3).read()" >/dev/null 2>&1; do
+            attempt=$((attempt + 1))
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          docker run --rm \
+            --network amos-toolbox-ci \
+            --entrypoint /usr/local/bin/amosctl \
+            --mount type=bind,source=/tmp/amos-ci-capability-key,target=/run/secrets/capability_key,readonly \
+            amos:ci tools smoke \
+            --endpoint amos-toolbox-ci:9000 \
+            --capability-key-file /run/secrets/capability_key

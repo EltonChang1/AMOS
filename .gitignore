@@ -25,7 +25,17 @@ venv/
 .env.*
 !.env.example
 
+# Private customer-discovery records. Commit only sanitized templates/evidence.
+/docs/customer_discovery/private/
+
+# Generated customer-evaluation deployment state and credentials
+/deploy/compose/.env
+/deploy/compose/config/server.json
+/deploy/compose/secrets/
+/deploy/compose/backups/
+
 # Generated local databases
+/.demo-advisor/
 data/**/*.sqlite
 data/**/*.sqlite-*
 data/**/*.duckdb

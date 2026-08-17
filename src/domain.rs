@@ -414,6 +414,7 @@ pub struct CapabilityClaims {
     pub atxn_id: String,
     pub plan_id: String,
     pub step_id: String,
+    pub step_hash: String,
     pub subject_id: String,
     pub tool: String,
     pub source_id: String,

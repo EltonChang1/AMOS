@@ -1,0 +1,12 @@
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!src/
+!src/**
+!benches/
+!benches/**
+!tool-packs/
+!tool-packs/**
+!toolbox/
+!toolbox/**

@@ -216,6 +216,29 @@ async fn versioned_api_exposes_the_complete_local_mvp_contract() {
             .unwrap()
             >= 1
     );
+
+    let (status, body) = request(&app, "GET", "/v1/tools", "analyst_001", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let tools = serde_json::from_slice::<Vec<Value>>(&body).unwrap();
+    assert!(tools.iter().any(|tool| {
+        tool["tool_id"] == "sql.readonly.v1" && tool["executable_plan_step"] == true
+    }));
+    assert!(tools.iter().any(|tool| {
+        tool["tool_id"] == "stats.rate_comparison.v1" && tool["executable_plan_step"] == false
+    }));
+    assert!(tools.iter().any(|tool| {
+        tool["tool_id"] == "spark.dataframe.aggregate.v1"
+            && tool["executable_plan_step"] == true
+            && tool["evaluation_only"] == true
+    }));
+    assert!(tools.iter().any(|tool| {
+        tool["tool_id"] == "spreadsheet.xlsx.v1" && tool["executable_plan_step"] == true
+    }));
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool["availability"] != "contract_only")
+    );
 }
 
 #[tokio::test]
@@ -260,6 +283,7 @@ async fn openapi_documents_every_versioned_route_and_public_security_boundary() 
         "/v1/source-events/process",
         "/v1/tasks",
         "/v1/tasks/{id}",
+        "/v1/tools",
         "/v1/transactions/{id}",
         "/v1/verify/sql",
     ]);
@@ -563,6 +587,7 @@ async fn protected_api_and_ui_routes_fail_closed_without_valid_bearer_credential
         "/v1/artifacts",
         "/v1/memory",
         "/v1/jobs",
+        "/v1/tools",
     ] {
         let (status, body) = request_raw(&app, "GET", uri, None, vec![], None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");

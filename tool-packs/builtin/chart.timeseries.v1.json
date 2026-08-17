@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "tool_id": "chart.timeseries.v1",
+  "display_name": "Time-series chart",
+  "description": "Renders a deterministic SVG time-series chart from bounded labeled points.",
+  "availability": "embedded_runtime",
+  "evaluation_only": false,
+  "runtime": {
+    "kind": "native_rust",
+    "audience": "chart-worker",
+    "entrypoint": "builtin:chart-timeseries",
+    "image_digest": null
+  },
+  "operations": ["render"],
+  "source_policy": {
+    "required": false,
+    "read_only": true,
+    "relations_parameter": null
+  },
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "points": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "label": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "value": { "type": "number" }
+          },
+          "required": ["label", "value"],
+          "additionalProperties": false
+        },
+        "minItems": 1,
+        "maxItems": 10000
+      }
+    },
+    "required": ["points"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "svg": { "type": "string", "minLength": 1 },
+      "content_hash": { "type": "string", "minLength": 1 }
+    },
+    "required": ["svg", "content_hash"],
+    "additionalProperties": false
+  },
+  "resource_limits": {
+    "max_seconds": 10,
+    "max_rows": 10000,
+    "max_bytes": 5000000,
+    "max_memory_mb": 256
+  },
+  "network_policy": "deny_all",
+  "determinism": {
+    "deterministic": true,
+    "seed_parameter": null,
+    "records_runtime_version": true
+  },
+  "verifier_profile": "chart.timeseries.v1"
+}

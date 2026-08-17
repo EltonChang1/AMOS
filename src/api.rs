@@ -75,6 +75,7 @@ pub fn router(runtime: AmosRuntime, identity_provider: Arc<dyn IdentityProvider>
         .route("/v1/verify/sql", post(verify_sql))
         .route("/v1/audit", get(audit))
         .route("/v1/metrics", get(metrics))
+        .route("/v1/tools", get(list_tools))
         .route("/v1/retention", post(set_retention))
         .route("/v1/retention/memory/{id}/erase", post(erase_memory))
         .route("/v1/jobs", get(list_jobs).post(enqueue_job))
@@ -757,6 +758,13 @@ async fn metrics(
     Ok(Json(state.runtime.metrics()))
 }
 
+async fn list_tools(
+    State(state): State<AppState>,
+    Extension(_identity): Extension<Identity>,
+) -> Json<Vec<crate::tools::ToolCatalogEntry>> {
+    Json(state.runtime.tool_catalog())
+}
+
 async fn set_retention(
     State(state): State<AppState>,
     Extension(user): Extension<Identity>,
@@ -1033,6 +1041,7 @@ async fn openapi() -> Json<Value> {
             "/v1/verify/sql":{"post":{"operationId":"verifySql","summary":"Preflight parsed read-only SQL","responses":{"200":{"$ref":"#/components/responses/Ok"},"4XX":{"$ref":"#/components/responses/Error"}}}},
             "/v1/audit":{"get":{"operationId":"listAudit","summary":"List tenant-scoped audit evidence","parameters":[{"$ref":"#/components/parameters/Limit"}],"responses":{"200":{"$ref":"#/components/responses/Ok"},"4XX":{"$ref":"#/components/responses/Error"}}}},
             "/v1/metrics":{"get":{"operationId":"getMetrics","summary":"Get tenant-safe local metrics","responses":{"200":{"$ref":"#/components/responses/Ok"},"4XX":{"$ref":"#/components/responses/Error"}}}},
+            "/v1/tools":{"get":{"operationId":"listGovernedTools","summary":"List registered governed tool contracts and execution availability","responses":{"200":{"$ref":"#/components/responses/Ok"},"4XX":{"$ref":"#/components/responses/Error"}}}},
             "/v1/connectors/health":{"get":{"operationId":"getConnectorHealth","summary":"Inspect connector health and source state","responses":{"200":{"$ref":"#/components/responses/Ok"},"4XX":{"$ref":"#/components/responses/Error"}}}},
             "/v1/jobs":{"get":{"operationId":"listJobs","summary":"List durable jobs","parameters":[{"$ref":"#/components/parameters/Limit"}],"responses":{"200":{"$ref":"#/components/responses/Ok"},"4XX":{"$ref":"#/components/responses/Error"}}},"post":{"operationId":"enqueueJob","summary":"Enqueue an idempotent operator job","responses":{"201":{"$ref":"#/components/responses/Created"},"4XX":{"$ref":"#/components/responses/Error"}}}},
             "/v1/source-events/process":{"post":{"operationId":"processSourceEvents","summary":"Process a bounded page of durable source events","responses":{"200":{"$ref":"#/components/responses/Ok"},"4XX":{"$ref":"#/components/responses/Error"}}}},

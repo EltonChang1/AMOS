@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "tool_id": "r.statistics.v1",
+  "display_name": "Governed R statistics",
+  "description": "Inactive authoring example for governed R statistics; the installed executable contract is tool-packs/executable/r.statistics.v1.json.",
+  "availability": "contract_only",
+  "evaluation_only": false,
+  "runtime": {
+    "kind": "r",
+    "audience": "r-worker",
+    "entrypoint": "amosR::run_statistic",
+    "image_digest": null
+  },
+  "operations": ["analyze"],
+  "source_policy": {
+    "required": true,
+    "read_only": true,
+    "relations_parameter": "relations"
+  },
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "relations": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "minItems": 1,
+        "maxItems": 8,
+        "uniqueItems": true
+      },
+      "method": {
+        "type": "string",
+        "enum": ["linear_regression", "welch_t_test", "chi_squared_test"]
+      },
+      "outcome": { "type": "string", "minLength": 1, "maxLength": 256 },
+      "predictors": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "minItems": 1,
+        "maxItems": 64,
+        "uniqueItems": true
+      },
+      "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+    },
+    "required": ["relations", "method", "outcome", "predictors", "seed"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "method": { "type": "string" },
+      "estimates": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": true
+        }
+      },
+      "diagnostics": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    "required": ["method", "estimates", "diagnostics"],
+    "additionalProperties": false
+  },
+  "resource_limits": {
+    "max_seconds": 600,
+    "max_rows": 50000,
+    "max_bytes": 50000000,
+    "max_memory_mb": 4096
+  },
+  "network_policy": "deny_all",
+  "determinism": {
+    "deterministic": true,
+    "seed_parameter": "seed",
+    "records_runtime_version": true
+  },
+  "verifier_profile": "r.statistics.v1"
+}
