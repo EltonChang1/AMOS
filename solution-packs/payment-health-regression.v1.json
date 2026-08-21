@@ -1,0 +1,169 @@
+{
+  "manifest": {
+    "schema_version": "amos.solution_pack.v1",
+    "pack_id": "amos.fixture.payment_health.v1",
+    "workflow_id": "payment_health_regression",
+    "version": "1.0.0",
+    "core_version_requirement": ">=0.2.0, <0.3.0",
+    "effective_start": "2026-08-20T00:00:00Z",
+    "effective_end": null,
+    "status": "approved",
+    "risk_class": "material_internal",
+    "tenant_allowlist": ["tenant_demo"],
+    "owner": {
+      "owner_id": "amos_regression_fixture_owner",
+      "role": "test_fixture_owner",
+      "approved_by": "amos_regression_fixture_owner",
+      "approved_at": "2026-08-20T00:00:00Z",
+      "approval_reference": "regression-fixture-not-product-approval"
+    },
+    "question_families": [
+      {
+        "family_id": "payment_failure_change_regression",
+        "examples": ["Why did the synthetic payment failure rate change?"],
+        "required_parameters": ["comparison_end", "comparison_start", "metric_id", "population", "requested_outputs", "window_end", "window_start"]
+      }
+    ],
+    "schedule": {
+      "allowed_time_zones": ["UTC"],
+      "allowed_recurrences": ["ad_hoc"],
+      "owner_required": true
+    },
+    "parameters": {
+      "comparison_end": {"parameter_type": "timestamp", "required": true, "allowed_values": [], "description": "Exclusive comparison-period end."},
+      "comparison_start": {"parameter_type": "timestamp", "required": true, "allowed_values": [], "description": "Inclusive comparison-period start."},
+      "metric_id": {"parameter_type": "string", "required": true, "allowed_values": ["payment_failure_rate"], "description": "Fixed synthetic regression metric."},
+      "population": {"parameter_type": "string", "required": true, "allowed_values": ["synthetic_production_non_test"], "description": "Synthetic production events excluding test accounts."},
+      "requested_outputs": {"parameter_type": "string_list", "required": true, "allowed_values": ["direct_answer", "evidence_package", "payment_report"], "description": "Allowlisted regression artifacts."},
+      "window_end": {"parameter_type": "timestamp", "required": true, "allowed_values": [], "description": "Exclusive current-period end."},
+      "window_start": {"parameter_type": "timestamp", "required": true, "allowed_values": [], "description": "Inclusive current-period start."}
+    },
+    "context_roles": [
+      {"role_id": "metric_definition", "memory_type": "semantic_definition", "required": true, "minimum_consistency": "C1", "minimum_authority": "owner_approved"},
+      {"role_id": "active_schema", "memory_type": "schema", "required": true, "minimum_consistency": "C1", "minimum_authority": "owner_approved"},
+      {"role_id": "data_snapshot", "memory_type": "data_state", "required": true, "minimum_consistency": "C2", "minimum_authority": "system_observed"},
+      {"role_id": "review_policy", "memory_type": "review_policy", "required": true, "minimum_consistency": "C1", "minimum_authority": "owner_approved"}
+    ],
+    "sources": [
+      {
+        "source_id": "warehouse_primary",
+        "connector_type": "sqlite_fixture",
+        "read_only": true,
+        "identity_propagation": "tenant_subject_and_pack",
+        "relations": [
+          {
+            "relation_id": "payment_events",
+            "physical_name": "payment_events",
+            "schema_version": "v2",
+            "sensitivity": "synthetic_internal",
+            "source_version_rule": "schema_hash_plus_snapshot_cutoff",
+            "columns": [
+              {"name": "event_id", "data_type": "text", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "event_time", "data_type": "timestamp", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "processor", "data_type": "text", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "card_network", "data_type": "text", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "environment", "data_type": "text", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "is_test_account", "data_type": "boolean", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "status", "data_type": "text", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "error_code", "data_type": "text", "nullable": true, "sensitivity": "synthetic_internal"}
+            ]
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "metric_id": "payment_failure_rate",
+        "version": "3",
+        "relation_id": "payment_events",
+        "formula": "failed_attempts / total_attempts",
+        "unit": "ratio",
+        "population_parameter": "population",
+        "time_grain": "hour",
+        "required_filters": ["environment = production", "is_test_account = false", "explicit event_time bounds"],
+        "owner_approval": "regression-fixture-not-product-approval",
+        "policy_limit": null,
+        "early_warning": null,
+        "materiality": 0.01,
+        "tolerance": 0.000001
+      }
+    ],
+    "bank_metadata": null,
+    "plan": {
+      "allowed_tools": ["chart.timeseries.v1", "sql.readonly.v1", "stats.rate_comparison.v1"],
+      "required_context_roles": ["active_schema", "data_snapshot", "metric_definition", "review_policy"],
+      "max_steps": 3,
+      "query_shapes": [
+        {
+          "shape_id": "payment_rate_comparison",
+          "purpose": "Compute synthetic current and comparison failure rates.",
+          "tool": "sql.readonly.v1",
+          "source_id": "warehouse_primary",
+          "relation_id": "payment_events",
+          "metric_id": "payment_failure_rate",
+          "sql_template": "SELECT status, COUNT(*) AS attempts FROM payment_events WHERE event_time >= '{{comparison_start}}' AND event_time < '{{window_end}}' AND environment = 'production' AND is_test_account = 0 GROUP BY status",
+          "verifier_profile": "payment_health_regression.v1",
+          "permitted_repairs": ["rename_declared_column"],
+          "limits": {"seconds": 10, "rows": 100, "bytes": 200000}
+        }
+      ]
+    },
+    "verifier": {
+      "profile_id": "payment_health_regression.v1",
+      "required_filters": ["explicit event_time bounds", "environment = production", "is_test_account = false"],
+      "reconciliation_rules": ["failure count does not exceed total attempts", "no duplicate event_id"],
+      "permitted_repairs": ["rename_declared_column"],
+      "review_obligations": [
+        {"claim_type": "metric_comparison", "reviewer_role": "reviewer", "segregation_of_duties": true},
+        {"claim_type": "operational_recommendation", "reviewer_role": "reviewer", "segregation_of_duties": true}
+      ]
+    },
+    "claims": [
+      {"claim_type": "metric_comparison", "value_schema": "current_baseline_rate", "required_evidence": ["execution", "metric_definition", "source_version"], "review_required": true},
+      {"claim_type": "operational_recommendation", "value_schema": "supported_text_with_limitations", "required_evidence": ["claim_support", "review_record"], "review_required": true}
+    ],
+    "artifacts": [
+      {"output_id": "direct_answer", "kind": "direct_answer", "template_id": "payment_health_answer.fixture.v1", "version": "1", "required_claim_types": ["metric_comparison"], "evidence_links_required": true, "editable": false},
+      {"output_id": "payment_report", "kind": "html_report", "template_id": "payment_health_report.fixture.v1", "version": "1", "required_claim_types": ["metric_comparison", "operational_recommendation"], "evidence_links_required": true, "editable": false},
+      {"output_id": "evidence_package", "kind": "evidence_package", "template_id": "evidence_manifest.v1", "version": "1", "required_claim_types": ["metric_comparison", "operational_recommendation"], "evidence_links_required": true, "editable": false}
+    ],
+    "publication": {
+      "review_required": true,
+      "reviewer_roles": ["reviewer"],
+      "destinations": [
+        {"destination_id": "local_fixture_output", "destination_type": "local_object_store", "allowed_artifacts": ["direct_answer", "evidence_package", "payment_report"]}
+      ],
+      "acknowledgment_required": true
+    },
+    "retention": {
+      "retention_days": 30,
+      "legal_hold_supported": true,
+      "deletion_mode": "tombstone_then_policy_purge",
+      "export_before_delete": true
+    },
+    "evaluation_cases": [
+      {
+        "case_id": "payment_health_regression_requires_review",
+        "question": "Why did the synthetic payment failure rate change?",
+        "parameters": {
+          "comparison_end": "2026-07-07T14:00:00Z",
+          "comparison_start": "2026-07-07T08:00:00Z",
+          "metric_id": "payment_failure_rate",
+          "population": "synthetic_production_non_test",
+          "requested_outputs": ["direct_answer", "payment_report", "evidence_package"],
+          "window_end": "2026-07-07T20:00:00Z",
+          "window_start": "2026-07-07T14:00:00Z"
+        },
+        "expected_outcome": "needs_review",
+        "expected_outputs": ["direct_answer", "evidence_package", "payment_report"]
+      }
+    ]
+  },
+  "signatures": [
+    {
+      "algorithm": "ed25519",
+      "key_id": "amos-development-fixture-publisher",
+      "signature_hex": "aff4e56f6b29f5dc285bd57c6f7211326e3a956d2f4846a9fca1d75432ff5933ff2c18db8db314c44c1a78152d3da62ac05cf6abca99da28c5ec632df6ce8b04"
+    }
+  ]
+}

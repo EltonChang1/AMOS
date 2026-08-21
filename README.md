@@ -55,6 +55,8 @@ fixture, not the AMOS product definition.
   correctness, security, deployment, support, and scope risks.
 - [Governed Tool SDK](docs/GOVERNED_TOOL_SDK.md): strict tool manifests,
   capability-bound executors, registry validation, and the analyst-tool catalog.
+- [Solution-pack authoring](docs/SOLUTION_PACK_AUTHORING.md): signed,
+  tenant-scoped workflow contracts, trust verification, and fixture boundaries.
 - [Design-partner discovery](docs/customer_discovery/README.md): Phase 1
   campaign, workflow-observation, qualification, scorecard, SOW, and security
   review artifacts.
@@ -73,6 +75,17 @@ fixture, not the AMOS product definition.
 - **Product surfaces:** a server-rendered Analysis Workspace, Memory Studio, Review Queue, and Operations Console—without a JavaScript runtime.
 
 The application, CLI, API, UI rendering, persistence, connectors, workers, and tests are all written in Rust. SQLite supplies reproducible local warehouse and control-plane adapters; the domain contracts remain independent of SQLite, Axum, or any model SDK.
+
+## Signed solution-pack foundation
+
+The repository contains a strict `amos.solution_pack.v1` contract, Ed25519
+signing and tenant-scoped trust verification, a validation/signing CLI, and two
+signed synthetic fixtures. The bank fixture defines an aggregate weekly
+liquidity-and-funding review; the payment fixture is regression evidence only.
+Unsigned, tampered, incompatible, ambiguous, write-capable, or unauthorized
+packs fail closed. The current runtime still executes the legacy reference
+workflow directly; durable activation and configuration-driven routing remain
+open and are not implied by successful pack validation.
 
 ## How it started
 
@@ -222,6 +235,8 @@ count.
 - `src/store.rs` — tenant-scoped SQLite persistence, CAS transitions, atomic evidence/review/publication/validity commits, outbox, audit, and jobs.
 - `src/memory.rs`, `src/context.rs`, `src/policy.rs` — governed memory, reconciliation, compaction, and permission-first context compilation.
 - `src/connectors.rs`, `src/workers.rs` — typed connector interface and capability-bound SQL, statistics, and chart workers.
+- `src/solution_pack.rs` — strict signed workflow contracts, tenant trust, and
+  fail-closed activation validation.
 - `src/verification.rs` — SQL, schema, metric, freshness, repair, and claim-support verification.
 - `src/evidence.rs`, `src/scheduler.rs` — citations, review feedback, invalidation, and fenced background work.
 - `src/publication.rs`, `src/observability.rs` — hash-checked local object promotion and tenant-safe operational metrics.

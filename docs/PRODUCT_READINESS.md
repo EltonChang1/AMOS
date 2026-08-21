@@ -1,8 +1,8 @@
 # AMOS implementation readiness
 
-Status: **control-layer reference slice complete; full analyst product not ready**
+Status: **control-layer reference slice and signed pack contract implemented; full analyst product not ready**
 
-Evidence date: 2026-08-12
+Evidence date: 2026-08-21
 
 Release: `amos 0.2.0`
 
@@ -18,7 +18,7 @@ product.
 ## Completion summary
 
 - Current control-layer fixture: all documented local tests pass.
-- Product-critical gaps: local Gemma 4 agent, domain-neutral configuration,
+- Product-critical gaps: local Gemma 4 agent, pack-driven runtime routing,
   report and slide planning, deterministic PPTX/PDF/spreadsheet generation,
   production connectors, enterprise deployment, and customer validation.
 - Current payment-specific task, schema, metric, verifier, permissions, and UI
@@ -31,6 +31,20 @@ product.
 - Historical Python evaluation results and scenario fixtures remain archived,
   but the `amos.evaluation` command implementations are absent from this Rust
   checkout. Those commands are not current executable evidence.
+- Signed solution-pack documents now define a strict domain-neutral
+  configuration boundary and include separate bank-liquidity and payment
+  regression fixtures. Successful validation does not mean the legacy runtime
+  is pack-driven yet.
+
+## Signed solution-pack contract
+
+| Promise | Implementation | Executable evidence | Status |
+|---|---|---|---|
+| Strict versioned workflow contract | `solution_pack::SolutionPackManifest` covers identity/effective state/owner, questions, parameters, context, sources, metrics, banking metadata, plans, verification/review, claims, outputs, publication, retention, and evaluations with unknown fields denied | `solution_pack::tests::strict_json_rejects_unknown_manifest_fields`; checked-in fixture integration test | Complete |
+| Asymmetric tenant trust | Ed25519 signatures over typed manifests; trusted publisher and pack both constrain tenants; semantic core compatibility and effective/approval state gate activation | `signed_approved_pack_verifies_for_authorized_tenant`; `unsigned_tampered_incompatible_and_unauthorized_packs_fail_closed` | Complete locally |
+| Read-only and ambiguity boundary | Source write capability is rejected; identifiers/references are closed; question examples and active workflow intervals cannot conflict | `ambiguous_or_write_capable_contracts_are_rejected`; `registry_rejects_overlapping_workflow_activation` | Complete locally |
+| Operator validation/signing | `amosctl solution-packs validate` reports hashes and signer identity; `sign` reads and zeroizes private key material from standard input and atomically promotes output | CLI signing/validation integration tests; configured finance CI fixture gate | Complete locally |
+| Bank and regression fixtures | Signed aggregate synthetic bank-liquidity pack plus separately scoped payment regression pack and development-only trust root | `checked_in_solution_packs_have_valid_tenant_scoped_signatures` | Complete as contract fixtures; not customer validation |
 
 ## Research-kernel contract
 
@@ -62,7 +76,7 @@ product.
 | Area | Local completion evidence | Deployment-only remainder |
 |---|---|---|
 | Analyst agent | Typed plans already record `model_identity`; runtime contracts are independent of a model SDK | Implement provider-neutral model routing and customer-local Gemma 4 inference with structured plan, narrative and slide-plan outputs |
-| Domain neutrality | Task definitions, schemas, metrics, policies and verifier profiles are typed and versioned | Remove payment constants and load all domain behavior from configuration or installable task packs |
+| Domain neutrality | Strict signed solution-pack contracts now type and validate task, source, metric, policy, verifier, review, artifact, publication, retention, and evaluation definitions | Persist tenant activation/version history and load runtime planning, connector, verification, composition, replay, and routing behavior from the active pack; remove payment constants from core |
 | Artifact generation | Deterministic SVG chart worker, typed artifacts, claim evidence and hash-addressed local publication | Produce editable PPTX, PDF/HTML reports, dashboards and spreadsheets from verified result objects |
 | Tenancy and identity | Tenant predicates and composite ownership are enforced in repositories and policy; static demo provider fails closed; 401/403 and second-analyst tests pass | Enterprise OIDC/SAML, issuer/JWKS/session lifecycle and PostgreSQL forced RLS need real tenants and infrastructure |
 | Storage concurrency and migrations | Eight-permit blocking lane; independent-connection CAS tests; checksummed forward migration ledger and restart-safe backfill | PostgreSQL pool/online DDL, backup, PITR and RLS rehearsal |
@@ -154,15 +168,19 @@ git diff --check
 AMOS_BENCH_MEMORY_ITEMS=10000 cargo bench --bench control_paths
 ```
 
-Both debug and release profiles run 64 tests (31 library, 15 API/CLI/UI and 18
-end-to-end runtime tests), with zero failures or ignored tests. `--all-targets`
-also executes the control-path benchmark. The release benchmark used 10,000
-memory objects and passed every threshold.
+Both debug and release profiles run 83 tests (44 library, 3 deployment, 15
+API/CLI/UI, 18 end-to-end runtime, and 3 solution-pack signing/fixture tests), with
+zero failures or ignored tests. `--all-targets` also executes the control-path
+benchmark. The 2026-08-21 release benchmark used 10,000 memory objects and
+passed every threshold; the final p95 included 87.929 ms retrieval, 39.359 ms
+governed task, and 33.659 ms persisted replay on this machine.
 
 The repository pins Rust 1.97.0 in `rust-toolchain.toml`, and
 `.github/workflows/ci.yml` enforces the same gates for pull requests and pushes
-to `main`. The dependency audit scanned all 155 locked crate dependencies with
-no reported vulnerability on 2026-08-12.
+to `main` or `finance`. The dependency audit scanned all 171 locked crate
+dependencies with no reported vulnerability on 2026-08-21. A clean
+Linux/aarch64 image build retained the non-root identity and validated both
+packaged signed fixtures from `/usr/share/amos/solution-packs`.
 
 ## Historical evaluation boundary
 

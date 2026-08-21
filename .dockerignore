@@ -8,5 +8,7 @@
 !benches/**
 !tool-packs/
 !tool-packs/**
+!solution-packs/
+!solution-packs/**
 !toolbox/
 !toolbox/**

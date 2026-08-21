@@ -15,6 +15,7 @@ pub mod publication;
 pub mod runtime;
 pub mod scheduler;
 pub mod seed;
+pub mod solution_pack;
 pub mod store;
 pub mod tools;
 pub mod verification;

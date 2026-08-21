@@ -10,6 +10,8 @@ COPY tool-packs ./tool-packs
 
 RUN cargo build --locked --release --bins
 
+COPY solution-packs ./solution-packs
+
 FROM debian:bookworm-slim AS runtime
 
 ARG AMOS_VERSION=0.2.0
@@ -24,6 +26,7 @@ RUN groupadd --gid 10001 amos \
 
 COPY --from=builder /build/target/release/amos /usr/local/bin/amos
 COPY --from=builder /build/target/release/amosctl /usr/local/bin/amosctl
+COPY --from=builder /build/solution-packs /usr/share/amos/solution-packs
 
 USER 10001:10001
 WORKDIR /var/lib/amos

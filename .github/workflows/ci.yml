@@ -2,7 +2,7 @@ name: Rust baseline
 
 on:
   push:
-    branches: [main]
+    branches: [main, finance]
   pull_request:
   workflow_dispatch:
 
@@ -36,6 +36,16 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --all-features
+      - name: Validate signed solution-pack fixtures
+        run: |
+          cargo run --locked --bin amosctl -- solution-packs validate \
+            --pack solution-packs/bank-weekly-liquidity.v1.json \
+            --trust-store solution-packs/trust/development-fixtures.json \
+            --tenant tenant_bank_fixture
+          cargo run --locked --bin amosctl -- solution-packs validate \
+            --pack solution-packs/payment-health-regression.v1.json \
+            --trust-store solution-packs/trust/development-fixtures.json \
+            --tenant tenant_demo
 
   debug-tests:
     name: Debug tests
@@ -124,6 +134,11 @@ jobs:
             amos:ci tools validate \
             --manifest /manifests/spark.dataframe.aggregate.v1.json \
             --manifest /manifests/r.statistics.v1.json
+          docker run --rm --entrypoint /usr/local/bin/amosctl amos:ci \
+            solution-packs validate \
+            --pack /usr/share/amos/solution-packs/bank-weekly-liquidity.v1.json \
+            --trust-store /usr/share/amos/solution-packs/trust/development-fixtures.json \
+            --tenant tenant_bank_fixture
       - name: Exercise every governed toolbox executable
         run: |
           openssl rand -hex 32 > /tmp/amos-ci-capability-key

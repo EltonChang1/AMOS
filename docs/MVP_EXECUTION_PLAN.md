@@ -6,9 +6,9 @@ not yet release-candidate or customer-validated**
 Planning horizon: **16 weeks to a validated MVP, followed by a 6–9 month
 repeatability and expansion phase**
 
-Implementation status last updated: **August 20, 2026**
+Implementation status last updated: **August 21, 2026**
 
-Evidence policy: implementation claims below refer to the current `MVP` branch
+Evidence policy: implementation claims below refer to the current `finance` branch
 working tree and locally verified behavior. They do not imply that changes have
 been reviewed, merged to `main`, exercised in a customer environment, or
 accepted by a paying design partner.
@@ -28,7 +28,7 @@ AMOS has moved beyond a paper architecture. The current working tree contains
 an installable customer-evaluation application, authenticated API and operator
 CLI, durable governed-workflow primitives, review and evidence surfaces, and a
 manifest-driven tool SDK with real constrained executors for common data
-analysis and artifact tasks. The latest local verification covers 75 Rust tests
+analysis and artifact tasks. The latest local verification covers 83 Rust tests
 and a catalog-wide smoke test of all 12 external toolbox executors.
 
 This is an **evaluation vertical slice**, not an MVP release candidate. The
@@ -47,9 +47,10 @@ customer demand, production suitability, or a repeatable deployment.
 | Application surfaces | Server-rendered inbox, workbench, review, and operations views; authenticated API; static-token configuration; health/readiness endpoints | Usable evaluation UI and API; enterprise identity and complete administrator workflows remain open |
 | Installable evaluation package | Non-root application and toolbox containers, Docker Compose topology, persisted volumes, secrets, health checks, installation script, preflight/configuration commands, backup, and diagnostics | Installable on a customer-controlled evaluation server; not yet a signed, hardened, upgradable production release |
 | Governed tool SDK | Strict manifest schema, registry, policy visibility, API/CLI discovery, capability-limited external transport, output validation, and documented extension contract | 15 catalog entries: 13 plan-step tools and two embedded deterministic tools |
+| Signed solution-pack foundation | Strict `amos.solution_pack.v1` contract, Ed25519 signing, tenant-scoped trust, validation/signing CLI, and signed bank/payment fixtures | Contract and fail-closed validation implemented; durable activation and pack-driven runtime routing remain open |
 | Data-analysis executors | Read-only SQL plus constrained Spark, R, pandas, Polars, DuckDB, dbt-manifest validation, regression, forecast, PCA, XLSX, PPTX, and notebook-inspection executors | All 12 external executors pass real catalog-wide smoke execution; arbitrary Python/R/notebook execution is intentionally unsupported |
 | Artifact primitives | Deterministic SVG charts and constrained editable XLSX and PPTX generation | Useful compiler foundations; not yet a complete branded answer/report/presentation/data-appendix package |
-| Engineering verification | 75 Rust tests, formatting, Clippy, docs, dependency audit, container build, health smoke test, and tool catalog smoke test have passed locally | Strong local evidence; reviewed `main` CI and customer-environment evidence are still required |
+| Engineering verification | 83 Rust tests, formatting, Clippy, docs, dependency audit, container build, health smoke test, tool catalog smoke test, and packaged solution-pack signature validation have passed locally | Strong local evidence; reviewed CI and customer-environment evidence are still required |
 | Planning and operating artifacts | Phase 0 backlog, proposed ADRs, configuration profiles, risk register, product-readiness record, deployment guide, and governed-tool SDK guide | Useful baseline; ownership approval, license, security policy, and several release runbooks remain incomplete |
 
 Primary evidence lives in
@@ -84,7 +85,7 @@ The executable catalog is in [`../tool-packs/`](../tool-packs/).
 | --- | --- | --- | --- |
 | P0 | No evidenced paid design partner or frozen workflow | Customer-discovery materials and scorecard drafts exist | Complete observations, sign the paid shadow-pilot agreement, record the buyer/source/workflow/decision date, and freeze the acceptance scorecard |
 | P0 | Phase 0 governance is incomplete | Backlog, CI workflow, ADR drafts, profiles, risk register, and readiness record exist | Assign named owners, approve scope, add a license and `SECURITY.md`, constrain or remove the payment demo, review ADRs, and make the reviewed `main` baseline green |
-| P0 | Core behavior remains payment-oriented | Strong governed transaction primitives exist | Move workflow, metric, query, review, and artifact behavior into a signed/versioned solution-pack contract and prove a second non-payment pack without core specialization |
+| P0 | Core behavior remains payment-oriented | Signed/versioned solution-pack contract and separate synthetic bank/payment packs now validate; strong governed transaction primitives exist | Persist pack activation and move workflow, metric, query, review, connector, and artifact behavior into the active pack so both fixtures execute without core specialization |
 | P0 | No customer-selected production data source | Read-only SQLite/reference connector behavior and SQL policies exist | Build and certify exactly one demanded warehouse connector, including identity propagation, source-state tokens, schema change handling, quotas, retries, and revocation tests |
 | P0 | No real analyst model loop | Deterministic planning and verification boundaries exist | Implement the provider-neutral propose/validate/execute/interpret loop and evaluate it on frozen pilot tasks without giving the model credentials or direct tool access |
 | P1 | Artifact product is incomplete | SVG, XLSX, and PPTX primitives exist | Define the verified-result IR and compile the full direct answer, accessible charts, branded editable presentation, HTML/PDF report, and XLSX/CSV appendix with claim-level evidence links |
@@ -101,7 +102,7 @@ The executable catalog is in [`../tool-packs/`](../tool-packs/).
 | --- | --- | --- |
 | 0. Program reset | **In progress** | Much of the engineering baseline exists, but named ownership, approval, license, security policy, demo constraint, and reviewed-main gates remain open |
 | 1. Paid pilot contract | **Not evidenced — critical blocker** | Discovery assets are present; no paid partner, ten observed runs, signed scope, or frozen scorecard is recorded |
-| 2. Solution-pack contract | **Partial foundation** | The governed tool-pack registry is reusable, but tool manifests are not the customer workflow/metric/template solution-pack contract required by this phase |
+| 2. Solution-pack contract | **Contract implemented; runtime migration in progress** | Strict signed tenant-scoped workflow contracts and two fixtures validate; activation history, routing, parameter binding, configured composition, and two end-to-end pack executions remain open |
 | 3. Production connector | **Reference implementation only** | Local read-only connector behavior exists; no real customer service has passed conformance |
 | 4. Analyst model loop | **Not implemented** | Deterministic planning fixtures are useful test seams, not a production model provider and evaluated agent loop |
 | 5. Artifact product | **Partial** | Chart, XLSX, and PPTX executors exist; the complete verified-result IR and branded decision package do not |

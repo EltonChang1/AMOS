@@ -7,9 +7,12 @@ use std::{
     time::Duration,
 };
 
+use chrono::Utc;
 use clap::{Parser, Subcommand};
+use ed25519_dalek::SigningKey;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::json;
+use zeroize::Zeroizing;
 
 use amos::{
     AmosError, AmosRuntime, Result,
@@ -17,6 +20,7 @@ use amos::{
     deployment::{ServerConfig, read_capability_key},
     domain::{Identity, OperationLimits, PlanStep, TypedPlan},
     seed,
+    solution_pack::{SignedSolutionPack, SolutionPackRegistry, TrustStore},
     store::Store,
     tools::{ToolImplementation, ToolManifest, ToolRegistry},
     workers::{CapabilityIssuer, ToolboxWorker},
@@ -66,6 +70,10 @@ enum Command {
         #[command(subcommand)]
         command: ToolsCommand,
     },
+    SolutionPacks {
+        #[command(subcommand)]
+        command: SolutionPacksCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -86,6 +94,28 @@ enum ToolsCommand {
         capability_key_file: PathBuf,
         #[arg(long)]
         tool_id: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SolutionPacksCommand {
+    Validate {
+        #[arg(long, required = true)]
+        pack: Vec<PathBuf>,
+        #[arg(long)]
+        trust_store: PathBuf,
+        #[arg(long)]
+        tenant: String,
+        #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+        core_version: String,
+    },
+    Sign {
+        #[arg(long)]
+        pack: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        key_id: String,
     },
 }
 
@@ -114,7 +144,89 @@ fn main() -> Result<()> {
                 tool_id,
             } => tools_smoke(&endpoint, &capability_key_file, tool_id.as_deref()),
         },
+        Command::SolutionPacks { command } => match command {
+            SolutionPacksCommand::Validate {
+                pack,
+                trust_store,
+                tenant,
+                core_version,
+            } => solution_packs_validate(&pack, &trust_store, &tenant, &core_version),
+            SolutionPacksCommand::Sign {
+                pack,
+                output,
+                key_id,
+            } => solution_pack_sign(&pack, &output, &key_id),
+        },
     }
+}
+
+fn solution_packs_validate(
+    paths: &[PathBuf],
+    trust_store_path: &Path,
+    tenant: &str,
+    core_version: &str,
+) -> Result<()> {
+    let trust_store = TrustStore::load(trust_store_path)?;
+    let now = Utc::now();
+    let mut registry = SolutionPackRegistry::default();
+    let mut verified = Vec::with_capacity(paths.len());
+    for path in paths {
+        let pack = SignedSolutionPack::load(path)?;
+        let result = registry.activate(pack, &trust_store, tenant, core_version, now)?;
+        verified.push(json!({
+            "path": path,
+            "pack_id": result.pack_id,
+            "workflow_id": result.workflow_id,
+            "version": result.version,
+            "manifest_hash": result.manifest_hash,
+            "verified_key_id": result.verified_key_id,
+            "tenant_id": result.tenant_id,
+            "status": "valid_for_activation"
+        }));
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "valid",
+            "pack_count": verified.len(),
+            "core_version": core_version,
+            "validated_at": now,
+            "packs": verified
+        }))?
+    );
+    Ok(())
+}
+
+fn solution_pack_sign(input: &Path, output: &Path, key_id: &str) -> Result<()> {
+    let mut private_key_input = Zeroizing::new(String::new());
+    io::stdin().read_to_string(&mut private_key_input)?;
+    let decoded = Zeroizing::new(hex::decode(private_key_input.trim()).map_err(|_| {
+        AmosError::Validation(
+            "Ed25519 private key on stdin must be exactly 32 bytes of hexadecimal".into(),
+        )
+    })?);
+    let private_key = Zeroizing::new(<[u8; 32]>::try_from(decoded.as_slice()).map_err(|_| {
+        AmosError::Validation(format!(
+            "Ed25519 private key on stdin must be exactly 32 bytes, found {}",
+            decoded.len()
+        ))
+    })?);
+    let mut pack = SignedSolutionPack::load(input)?;
+    pack.sign(key_id, &private_key)?;
+    pack.save_pretty(output)?;
+    let signing_key = SigningKey::from_bytes(&private_key);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "signed",
+            "pack_id": pack.manifest.pack_id,
+            "manifest_hash": pack.manifest_hash()?,
+            "key_id": key_id,
+            "public_key_hex": hex::encode(signing_key.verifying_key().to_bytes()),
+            "output": output
+        }))?
+    );
+    Ok(())
 }
 
 fn tools_smoke(endpoint: &str, capability_key_file: &Path, selected: Option<&str>) -> Result<()> {
