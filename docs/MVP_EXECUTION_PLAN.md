@@ -6,7 +6,7 @@ not yet release-candidate or customer-validated**
 Planning horizon: **16 weeks to a validated MVP, followed by a 6–9 month
 repeatability and expansion phase**
 
-Implementation status last updated: **August 17, 2026**
+Implementation status last updated: **August 20, 2026**
 
 Evidence policy: implementation claims below refer to the current `MVP` branch
 working tree and locally verified behavior. They do not imply that changes have
@@ -133,8 +133,9 @@ workflow:
 The MVP is intentionally narrow:
 
 - one paid design partner initially;
-- one recurring executive, finance, revenue, risk, or operations review;
-- one department and one reviewer role;
+- one weekly bank liquidity and funding review for Treasury, the CFO, and ALCO
+  or an equivalent committee;
+- one Treasury/finance team and one independent reviewer role;
 - one production read-only warehouse connector chosen from signed customer
   demand;
 - one metric family containing approximately three to ten approved metrics;
@@ -157,6 +158,229 @@ There are two completion gates:
 
 Three design partners and two annual conversions are the next commercial
 milestone, not a reason to delay learning from the first partner.
+
+### Bank and regulated-financial-services vertical focus
+
+AMOS should tailor its first vertical to **banks and bank-like regulated
+financial services**, not generic corporate finance. The recommended first
+wedge is a **weekly liquidity and funding review** that turns approved Treasury
+and finance data into a verified decision package for the Treasurer, CFO, risk
+oversight, and the asset-liability committee (ALCO) or equivalent reviewer.
+
+"Bank-like" can include a credit union, licensed lender, regulated payments
+institution, or a fintech operating through a sponsor bank. Those organizations
+do not share one regulatory perimeter: every pack must identify the charter,
+jurisdictions, regulator or sponsor-bank relationship, legal entities, system
+role, data classes, and control owners before enabling workflow behavior.
+
+The exact workflow still requires paid-partner evidence. A suitable first bank
+pack would select three to ten customer-approved metrics from:
+
+- available and unencumbered liquidity relative to the customer's policy
+  buffer;
+- contractual and behavior-adjusted cash-flow gaps over approved horizons;
+- deposit balances, inflows/outflows, concentrations, and cost of funds;
+- wholesale or brokered funding dependency and maturity concentration;
+- confirmed borrowing and collateral capacity, including test status;
+- approved base and stress-scenario outcomes and early-warning indicators; and
+- source freshness, reconciliation breaks, limit exceptions, and unresolved
+  assumption changes.
+
+AMOS would produce the direct answer, exception list, cash-flow/funding charts,
+editable ALCO presentation, review report, data appendix, and evidence manifest
+for that one workflow. It would not replace the core banking system, general
+ledger, ALM engine, regulatory-reporting system, model-risk program, or bank
+control owners.
+
+This wedge is recurring, review-sensitive, and measurable. It exercises AMOS's
+deterministic calculations, governed agent tools, evidence, review, replay, and
+customer-local deployment while keeping financial actions outside the product.
+The existing payment fixture is implementation evidence only; it is not bank
+product validation.
+
+Initial users and decisions are deliberately narrow:
+
+| Persona | Primary job in AMOS | Decision supported |
+| --- | --- | --- |
+| Treasury or finance analyst | Run the approved liquidity/funding workflow, inspect cash gaps and exceptions, ask bounded follow-ups, and prepare the package | What changed, what breaches or approaches a policy limit, and what needs escalation? |
+| Treasurer or CFO | Review assumptions and material claims, approve corrections, and release the ALCO package | Is the package current, policy-aligned, and sufficiently supported for management review? |
+| Independent risk or ALCO reviewer | Challenge scenarios, limits, concentrations, and overrides without changing the source result | Were governing policies and review requirements followed? |
+| Data, model, or metric owner | Approve source mappings, definitions, scenario versions, model outputs, tolerances, and changes | Are inputs and methods authorized for this legal entity and period? |
+| Compliance, model-risk, or internal-audit observer | Inspect applicability decisions, control tests, evidence, versions, and exceptions | Can the bank reconstruct how each conclusion was produced and reviewed? |
+| Customer administrator/operator | Configure identity, source, pack, policies, schedules, retention, and health | Can the workflow run safely and reliably inside the bank's trust boundary? |
+
+For the MVP, AMOS must remain read-only toward bank and customer systems and
+must not:
+
+- move money, initiate or approve payments, pledge collateral, draw a funding
+  line, or post to a ledger;
+- set or change a risk limit, contingency-funding action, liquidity assumption,
+  risk grade, allowance, reserve, or accounting treatment;
+- make or execute credit, pricing, underwriting, account, investment, or
+  trading decisions;
+- identify a person as suspicious, autonomously close BSA/AML, sanctions,
+  fraud, credit, or reconciliation cases, or file a SAR;
+- submit a Call Report or other regulatory filing, or represent an AMOS result
+  as an official regulatory calculation or certified filing;
+- send an unreviewed package outside the configured bank destination; or
+- claim that installation alone makes the institution compliant with a law,
+  regulation, supervisory expectation, accounting framework, or industry
+  standard.
+
+Each expansion requires its own use-case risk assessment, control owner,
+legal/compliance review, model determination, qualification plan, and explicit
+customer decision after the analytical MVP is validated.
+
+### Bank and regulated-services feature requirements
+
+Bank-specific behavior belongs in a signed, versioned solution pack while
+authorization, execution, evidence, review, replay, and publication remain
+domain-neutral core services.
+
+| Capability | MVP requirement | Boundary or later expansion |
+| --- | --- | --- |
+| Institution and balance-sheet model | Represent bank/holding-company and subsidiary legal entities, business line, branch or channel, product, account/GL mapping, core/ledger/ALM source, currency, and transferability restrictions used by the selected workflow | Do not build a universal banking ontology or replace the bank's core, chart of accounts, enterprise data model, or regulatory-reporting system |
+| Governed measures and limits | Store owner, formula, units, population, horizon, cutoff, source, approved policy limit, early-warning threshold, materiality, tolerance, effective version, and approval state | Labels such as regulatory, accounting, risk-appetite, or board-approved are customer assertions with evidence; AMOS does not certify them |
+| Liquidity and funding | Support approved current and projected cash flows, discrete/cumulative gaps, available liquidity, unencumbered assets, borrowing capacity, collateral state, funding mix, concentrations, maturity profile, and contingency sources | AMOS prepares analysis and exceptions; Treasury and authorized bank systems make funding and collateral decisions |
+| Deposit analytics | Support balances, inflows/outflows, retention or decay assumptions, concentrations, rates/cost, channel/product/entity segmentation, and customer-approved classifications | Customer/account-level PII is minimized and masked; classifications such as uninsured, brokered, or volatile are used only from approved bank definitions |
+| Scenarios and early warnings | Version base/stress scenarios, behavioral assumptions, horizons, triggers, severity, approval, model output, backtests, limitations, and comparison results | AMOS does not invent stress assumptions or treat a generated scenario as approved; model-risk requirements attach when the method qualifies as a model |
+| ALM and interest-rate-risk extension | Import approved repricing, duration, net-interest-income, economic-value, and deposit-beta outputs when demanded by the partner | The first pack consumes authoritative ALM outputs; recreating an ALM engine is out of scope |
+| Credit-portfolio extension | Import approved exposure, delinquency, nonaccrual, charge-off, allowance, concentration, and risk-grade migration metrics for a separately approved review | No borrower-level decision, risk-grade change, CECL/allowance booking, adverse action, or automated credit decision |
+| Reconciliation and data quality | Run completeness, duplication, balance, cutoff, late-data, entity, currency, collateral, and source-to-GL/ALM checks with versioned tolerances | AMOS identifies and packages breaks; a human or authoritative system resolves and posts them |
+| Exception and escalation workflow | Give each exception a metric/limit, entity, amount/unit, materiality, owner, age, due date, state, evidence, escalation path, and disposition reason | No autonomous remediation or contingency-plan activation |
+| Governance and segregation of duties | Enforce preparer/reviewer separation, role-specific evidence, approval matrices, policy/limit ownership, assumption/model approval, override reason, and revalidation before publication | Board or committee governance remains the bank's responsibility; AMOS records the workflow and evidence |
+| Evidence and examination readiness | Link each material value and conclusion to source state, query, result hash, definition/limit, scenario and model version, checks, reviewer, package, and publication record; preserve originals and append corrections | Customer policy determines regulated-record status, workpaper format, retention, legal hold, and examination-production requirements |
+| Regulatory-report mapping | Allow customer-approved lineage from metrics to applicable report lines, instructions, policies, and control tests | AMOS does not determine applicability, submit returns, or replace the bank's regulatory-reporting controls |
+| Security and nonpublic information | Provide enterprise SSO/MFA/groups, source-native row/column policy, tenant isolation, encryption, managed keys/secrets, masking/tokenization, audited break-glass access, configurable retention, and customer-local deployment | Keep credentials, PAN/authentication data, unnecessary customer PII/NPI, SAR information, and restricted supervisory material out of prompts, logs, telemetry, and general artifacts |
+| Agent and model-risk controls | Inventory exact model, prompt, pack, tool, policy, scenario, and authoritative-model versions; use typed plans and allowlisted tools; recompute deterministic values; run frozen evaluations and regression checks; record overrides | The model proposes plans and narrative but is never the authoritative calculator, risk-limit owner, validated bank model, or autonomous high-impact decision maker |
+| Bank control overlays | Attach charter/use-case-specific BSA/AML, OFAC, fair-lending, consumer, payments, broker/dealer, privacy, cybersecurity, and recordkeeping controls only when applicable | The liquidity MVP may show aggregate control status but cannot investigate customers, determine suspicious activity, or make regulated customer decisions |
+| Third-party and sponsor-bank evidence | Export architecture, data flows, access model, change records, service levels, incidents, tests, subcontractors, model/tool inventory, recovery evidence, and offboarding procedures required by the customer | AMOS supports the bank's due diligence and monitoring; it does not approve itself as a third party or shift the bank's responsibility |
+| Integrations | Certify the one customer-selected read-only warehouse first and import only demanded core/GL, Treasury, ALM, semantic/dbt, policy/limit, and branded-template data | Additional cores, ALM vendors, payment processors, loan systems, GRC tools, and regulatory platforms follow contracted demand |
+| Applicability register | Record charter/customer type, jurisdiction, regulator or sponsor, legal entity, workflow, data classes, system role, regime/standard, control owner, applicability decision, evidence, and review date | This is an applicability and evidence mechanism, not automated legal advice or a compliance certification engine |
+
+The control baseline must be tailored to the institution and use case. As of
+this plan update, relevant primary references include:
+
+- the banking agencies' revised-August-2023
+  [Interagency Policy Statement on Funding and Liquidity Risk Management](https://www.federalreserve.gov/frrs/guidance/interagency-policy-statement-on-funding-and-liquidity-risk-management.htm),
+  including governance, cash-flow projection, diversified funding, liquid-asset
+  cushions, stress testing, contingency funding, monitoring, and controls;
+- the Federal Reserve's April 17, 2026
+  [revised model-risk guidance (SR 26-2)](https://www.federalreserve.gov/supervisionreg/srletters/SR2602.htm),
+  which supersedes SR 11-7 for applicable banking organizations;
+- the current
+  [FFIEC 041 Call Report information and instructions](https://www.ffiec.gov/resources/reporting-forms/ffiec041)
+  as an example of authoritative report definitions and change-controlled
+  instructions, not as permission for AMOS to file a report;
+- the February-2026-updated
+  [FFIEC BSA/AML Examination Manual](https://bsaaml.ffiec.gov/manual),
+  which informs use-case boundaries and risk-focused evidence but does not
+  itself establish legal requirements;
+- the banking agencies'
+  [interagency third-party risk-management guidance](https://www.occ.treas.gov/news-issuances/bulletins/2023/bulletin-2023-17.html)
+  when a bank treats AMOS as a third party;
+- the FTC's
+  [Safeguards Rule guidance](https://www.ftc.gov/business-guidance/resources/ftc-safeguards-rule-what-your-business-needs-know),
+  the New York Department of Financial Services
+  [Cybersecurity Resource Center](https://www.dfs.ny.gov/industry_guidance/cybersecurity),
+  and the PCI Security Standards Council's
+  [PCI DSS resources](https://www.pcisecuritystandards.org/standards/pci-dss/)
+  when their respective entity, jurisdiction, or card-data scope applies; and
+- the voluntary
+  [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
+  and generative-AI profile for model governance, provenance, testing, and
+  incident planning.
+
+Customer counsel, compliance, security, accounting, Treasury, risk, model-risk,
+and control owners decide which obligations and supervisory expectations apply.
+AMOS should provide technical controls and evidence without describing the
+product as inherently compliant.
+
+### AMOS Bank dashboard specification
+
+The bank dashboard should be a **liquidity decision-and-control cockpit**, not
+a generic BI dashboard and not a chat window over customer data. Within
+seconds, an authorized user should be able to answer: what changed, which
+policy limit or early-warning threshold is affected, which input or assumption
+is stale, who must act, and whether the ALCO package is ready for review.
+
+The first solution pack exposes Overview, Liquidity & Funding, Review Queue,
+Evidence & Lineage, Models & Controls, Operations, and Administration. Deposit,
+Balance Sheet/ALM, Credit Portfolio, BSA/AML, and Payments surfaces appear only
+when a signed pack and the user's role require them.
+
+| Surface | Purpose |
+| --- | --- |
+| Overview | Available liquidity, policy buffer, cash gaps, deposit/funding movements, exceptions, control readiness, and package state |
+| Liquidity and funding | Inspect approved cash-flow horizons, funding sources/maturities, liquid assets, collateral and borrowing capacity, concentrations, scenarios, and limits |
+| Deposits | Inspect authorized aggregate balance, flow, concentration, pricing/cost, channel/product, and approved behavior assumptions when in scope |
+| Balance sheet and ALM | Inspect imported authoritative balance-sheet, repricing, interest-rate-risk, and scenario outputs when in scope |
+| Credit portfolio | Inspect aggregate approved credit-quality, concentration, and migration metrics in a separate pack when in scope |
+| Review queue | Challenge assumptions and claims, inspect changes, approve/reject/correct, and control package publication |
+| Evidence and lineage | Traverse definition/limit, source state, query/result, scenario/model, verification, review, package, and publication records |
+| Models and controls | View model/use-case determinations, versions, validations, limitations, policy tests, overrides, access reviews, and applicability decisions |
+| Operations | Monitor sources, models, workers, queues, schedules, publications, recovery, and support bundles without exposing restricted bank data |
+| Administration | Manage identity/groups, sources, packs, policies/limits, model profiles, templates, secrets, retention, and destinations |
+
+The default Overview layout is:
+
+```text
++----------------------------------------------------------------------------------+
+| AMOS Bank | Institution/entity | As-of/cutoff | Sources | Pack/policy/model | Me  |
++------------+------------------------------------------------------+--------------+
+| Overview   | KPI cards: value | limit | state | source freshness  | Evidence     |
+| Liquidity  +------------------------------------------------------+ drawer        |
+| Deposits*  | Policy and early-warning items requiring attention   | definition   |
+| ALM*       | severity | headroom | owner | due | review state     | source/query |
+| Credit*    +-----------------------------+------------------------+ scenario     |
+| Reviews    | Cash-flow/funding outlook   | Control & contingency  | limit/model  |
+| Evidence   | by approved horizon/scenario| readiness              | checks       |
+| Controls   +-----------------------------+------------------------+ reviewer     |
+| Operations | Recent AMOS runs            | ALCO decision package  |              |
+| Admin      | status/evidence/publication | PPTX PDF XLSX manifest | Open full    |
++------------+-----------------------------+------------------------+--------------+
+| Ask an approved follow-up...          [entity/horizon/scenario locked] [Run]      |
++----------------------------------------------------------------------------------+
+* Enabled only by the installed pack and role.
+```
+
+Dashboard behavior and presentation requirements:
+
+- top-level KPI cards are pack-configured and show value/unit, policy limit or
+  approved comparison, headroom, horizon, entity, scenario, freshness, and one
+  explicit state: **within limit**, **early warning**, **needs review**,
+  **stale**, or **blocked**;
+- no card claims a regulatory ratio unless the applicability decision,
+  authoritative definition, source mapping, and control owner are configured;
+- selecting a metric, limit exception, scenario, claim, or run opens the same
+  evidence drawer and never exposes customer/account detail without explicit
+  authorization;
+- the attention queue ranks by customer policy severity and due date, not by
+  model confidence, and shows headroom, owner, escalation route, and action;
+- charts show legal entity, as-of/cutoff, currency/units, horizon, scenario,
+  source freshness, and whether values are contractual, behavioral, or model
+  outputs;
+- persistent entity, cutoff, horizon, currency, and scenario scope prevents a
+  follow-up from silently changing the governing analysis;
+- package readiness separately reports source reconciliation, deterministic
+  verification, scenario/model approval, evidence completeness, independent
+  review, policy revalidation, and publication acknowledgement;
+- role and source permissions remove unauthorized objects and metadata rather
+  than revealing that they exist, with SAR and restricted supervisory
+  information segregated from the general workspace;
+- every warning includes the customer policy/limit, reason, owner, and next
+  action; color is never the only status signal;
+- the layout remains usable at 320 CSS pixels and supports keyboard navigation,
+  visible focus, semantic headings/tables, screen-reader names, and reduced
+  motion; and
+- all example institutions, values, policies, and events are labeled synthetic
+  and cannot be mistaken for customer, regulatory, or production results.
+
+The MVP dashboard is complete when a Treasury analyst can find the most severe
+open funding or liquidity item, inspect its source/definition/scenario/limit,
+run a bounded follow-up, and prepare the package; and when an independent
+reviewer can verify a material number, understand every blocker, approve or
+reject the package, and release it without SQL, a CLI, or engineering help.
 
 ## 2. Required end-to-end user journey
 
@@ -385,8 +609,9 @@ not be guessed before customer evidence exists.
 
 Tasks:
 
-1. Build a list of at least 30 qualified Heads/VPs of Data, Analytics, AI
-   Platform, Finance, Revenue Operations, Risk, or Operations.
+1. Build a list of at least 30 qualified bank Treasurers, CFOs, ALCO or
+   liquidity-risk leaders, and Heads/VPs of Data or Analytics at banks,
+   credit unions, sponsor-bank programs, and bank-like regulated services.
 2. Conduct problem interviews using a concrete recurring-report prompt rather
    than an “AI governance platform” pitch.
 3. Observe at least ten real recurring review workflows end to end: request,
@@ -403,12 +628,18 @@ Tasks:
    - known freshness, schema, and definition failures;
    - publication destination;
    - buyer, technical champion, data owner, reviewer, security stakeholder, and
-     procurement path; and
-   - value, urgency, budget, decision date, and disqualifying constraints.
-5. Score candidates. Prefer a partner that has a warehouse, approved metrics,
-   a weekly workflow, a read-only test environment, a named data owner and
-   reviewer, a measurable baseline, weekly access to the team, and a short
-   procurement path.
+     procurement path;
+   - value, urgency, budget, decision date, and disqualifying constraints; and
+   - for bank and regulated-services candidates, charter/entity and regulator
+     or sponsor relationship, currencies and cutoffs, source-of-record and
+     reconciliation boundaries, policy limits/early warnings, approved
+     scenarios/models, segregation-of-duties rules, prohibited actions,
+     applicable regimes, and record-retention owner.
+5. Score candidates. Prefer a partner that has a warehouse, documented
+   liquidity/funding definitions and policy limits, a weekly Treasury or ALCO
+   workflow, a read-only test environment, named data/model/control owners and
+   an independent reviewer, a measurable baseline, weekly access to the team,
+   and a short procurement path.
 6. Select the workflow based on urgency and reuse potential, not on the current
    payment fixture or general warehouse market share.
 7. Agree to a fixed-scope paid shadow pilot. A price-discovery range of
@@ -452,6 +683,10 @@ Tasks:
   - required context roles and consistency classes;
   - sources, relations, schemas, sensitivity, and source-version rules;
   - metric definitions, required filters, units, populations, and time grains;
+  - optional bank metadata for charter/regulator/sponsor, legal entity,
+    business line, product, account/GL hierarchy, currency, cutoff, liquidity
+    horizon, policy limit/early warning, materiality, reconciliation rule,
+    scenario/model version, collateral/funding class, and tolerance;
   - allowed plan steps, tools, query shapes, repair classes, and limits;
   - verifier rules and review obligations;
   - claim schemas and evidence requirements;
@@ -635,6 +870,11 @@ administrator product.
 Tasks:
 
 - add enterprise sign-in and a real browser session flow;
+- build the AMOS Bank Overview as the entity-, cutoff-, horizon-, and
+  scenario-scoped liquidity control cockpit specified in Section 1, with
+  pack-configured metrics/limits, funding movements, attention queue,
+  source/control readiness, recent runs, ALCO-package state, and a consistent
+  evidence drawer;
 - build an analyst workspace for questions, workflow selection, parameters,
   schedules, progress, results, follow-ups, downloads, and task history;
 - make task admission asynchronous: return a task ID, expose durable progress,
@@ -980,6 +1220,14 @@ outputs. At minimum, report every metric below.
 | Support burden | Founder/engineer hours per customer per week and incidents per run | Must trend down across cycles and customers |
 | Customer decision | Renew, deploy, expand, extend, or stop | Explicit at the agreed date |
 
+For a bank liquidity/funding workflow, add only the measures that apply to the
+signed pilot: source-to-report reconciliation coverage, false exceptions,
+policy-limit/early-warning detection, stale source or assumption detection,
+scenario reproducibility, package preparation/review time, exception aging,
+post-publication correction rate, and preparer/reviewer segregation violations.
+Definitions, limits, scenarios, and thresholds must be frozen before the first
+scored cycle.
+
 Also track commercial discovery weekly:
 
 - qualified interviews and observed workflows;
@@ -1007,6 +1255,15 @@ workflow.
 - [ ] Assumptions, limitations, freshness, sensitivity, audience, and review requirements are visible.
 - [ ] Reviewer corrections affect the next applicable task while originals remain immutable.
 - [ ] Follow-ups preserve the governing analytical scope unless the user explicitly changes it.
+- [ ] Applicable charter/regulator or sponsor context, legal entity, currency,
+      cutoff, liquidity horizon, policy limit/early warning, materiality,
+      scenario/model, tolerance, and reconciliation rules are versioned,
+      visible, approved, and tested.
+- [ ] The AMOS Bank Overview exposes severe open items, limit/headroom,
+      source/assumption freshness, evidence/review state, and package blockers
+      without leaking customer, SAR, or restricted supervisory metadata.
+- [ ] The preparer cannot self-approve where the signed workflow requires
+      segregation of duties, and every override has an owner and reason.
 
 ### Authorization and security
 
