@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "deployment_mode": "customer_evaluation",
+  "acknowledge_local_reference_adapters": true,
+  "bind_address": "0.0.0.0",
+  "port": 8000,
+  "public_base_url": "https://amos.customer.example",
+  "control_db": "/var/lib/amos/data/control.sqlite",
+  "warehouse_db": "/var/lib/amos/data/warehouse.sqlite",
+  "object_root": "/var/lib/amos/objects",
+  "capability_key_file": "/run/secrets/capability_key",
+  "identities_file": "/run/secrets/identities",
+  "toolbox_endpoint": "toolbox:9000"
+}

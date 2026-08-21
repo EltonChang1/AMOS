@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "tool_id": "presentation.pptx.v1",
+  "display_name": "Editable PPTX presentation",
+  "description": "Compiles bounded title-and-bullet slide specifications into an editable widescreen PPTX artifact.",
+  "availability": "plan_step", "evaluation_only": true,
+  "runtime": { "kind": "python", "audience": "presentation-worker", "entrypoint": "toolbox:presentation", "image_digest": null },
+  "operations": ["render"],
+  "source_policy": { "required": false, "read_only": true, "relations_parameter": null },
+  "parameter_schema": { "type": "object", "properties": {
+    "slides": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "type": "object", "properties": {
+      "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+      "bullets": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 2000 }, "minItems": 1, "maxItems": 20 }
+    }, "required": ["title", "bullets"], "additionalProperties": false } }
+  }, "required": ["slides"], "additionalProperties": false },
+  "output_schema": { "type": "object", "properties": {
+    "media_type": { "type": "string" }, "extension": { "type": "string", "enum": ["pptx"] }, "bytes": { "type": "integer", "minimum": 1 },
+    "sha256": { "type": "string", "minLength": 64, "maxLength": 64 }, "base64": { "type": "string", "minLength": 1 }
+  }, "required": ["media_type", "extension", "bytes", "sha256", "base64"], "additionalProperties": false },
+  "resource_limits": { "max_seconds": 120, "max_rows": 100, "max_bytes": 50000000, "max_memory_mb": 2048 },
+  "network_policy": "deny_all",
+  "determinism": { "deterministic": false, "seed_parameter": null, "records_runtime_version": true },
+  "verifier_profile": "presentation.pptx.v1"
+}

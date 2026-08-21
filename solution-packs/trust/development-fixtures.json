@@ -1,0 +1,10 @@
+{
+  "schema_version": "amos.solution_pack.trust.v1",
+  "publishers": [
+    {
+      "key_id": "amos-development-fixture-publisher",
+      "public_key_hex": "ef68aa4f7143594c0f5c7dda94b8cb4af0cd0f91fe1d782441ad7e4369dd1b6a",
+      "tenant_allowlist": ["tenant_bank_fixture", "tenant_demo"]
+    }
+  ]
+}

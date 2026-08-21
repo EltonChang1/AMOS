@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "tool_id": "spark.dataframe.aggregate.v1",
+  "display_name": "Spark DataFrame aggregation",
+  "description": "Inactive authoring example for a bounded Spark aggregation; the installed executable contract is tool-packs/executable/spark.dataframe.aggregate.v1.json.",
+  "availability": "contract_only",
+  "evaluation_only": false,
+  "runtime": {
+    "kind": "spark",
+    "audience": "spark-worker",
+    "entrypoint": "amos_spark.aggregate",
+    "image_digest": null
+  },
+  "operations": ["aggregate", "query"],
+  "source_policy": {
+    "required": true,
+    "read_only": true,
+    "relations_parameter": "relations"
+  },
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "relations": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "minItems": 1,
+        "maxItems": 8,
+        "uniqueItems": true
+      },
+      "group_by": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "maxItems": 32,
+        "uniqueItems": true
+      },
+      "metrics": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "function": {
+              "type": "string",
+              "enum": ["count", "sum", "avg", "min", "max"]
+            },
+            "column": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "alias": { "type": "string", "minLength": 1, "maxLength": 256 }
+          },
+          "required": ["function", "column", "alias"],
+          "additionalProperties": false
+        },
+        "minItems": 1,
+        "maxItems": 32
+      },
+      "filters": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "maxItems": 64
+      }
+    },
+    "required": ["relations", "group_by", "metrics", "filters"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": true
+    },
+    "maxItems": 50000
+  },
+  "resource_limits": {
+    "max_seconds": 900,
+    "max_rows": 50000,
+    "max_bytes": 50000000,
+    "max_memory_mb": 8192
+  },
+  "network_policy": "source_only",
+  "determinism": {
+    "deterministic": true,
+    "seed_parameter": null,
+    "records_runtime_version": true
+  },
+  "verifier_profile": "spark.dataframe.aggregate.v1"
+}

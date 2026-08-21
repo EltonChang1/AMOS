@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "tool_id": "stats.rate_comparison.v1",
+  "display_name": "Rate comparison",
+  "description": "Computes current, baseline, and absolute rate changes from bounded counts.",
+  "availability": "embedded_runtime",
+  "evaluation_only": false,
+  "runtime": {
+    "kind": "native_rust",
+    "audience": "stats-worker",
+    "entrypoint": "builtin:stats-rate-comparison",
+    "image_digest": null
+  },
+  "operations": ["analyze"],
+  "source_policy": {
+    "required": false,
+    "read_only": true,
+    "relations_parameter": null
+  },
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "current_failures": { "type": "integer", "minimum": 0 },
+      "current_total": { "type": "integer", "minimum": 1 },
+      "baseline_failures": { "type": "integer", "minimum": 0 },
+      "baseline_total": { "type": "integer", "minimum": 1 }
+    },
+    "required": [
+      "current_failures",
+      "current_total",
+      "baseline_failures",
+      "baseline_total"
+    ],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "current_rate": { "type": "number" },
+      "baseline_rate": { "type": "number" },
+      "absolute_change": { "type": "number" }
+    },
+    "required": ["current_rate", "baseline_rate", "absolute_change"],
+    "additionalProperties": false
+  },
+  "resource_limits": {
+    "max_seconds": 5,
+    "max_rows": 4,
+    "max_bytes": 4096,
+    "max_memory_mb": 64
+  },
+  "network_policy": "deny_all",
+  "determinism": {
+    "deterministic": true,
+    "seed_parameter": null,
+    "records_runtime_version": true
+  },
+  "verifier_profile": "stats.rate_comparison.v1"
+}

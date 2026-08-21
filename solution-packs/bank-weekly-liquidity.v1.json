@@ -1,0 +1,324 @@
+{
+  "manifest": {
+    "schema_version": "amos.solution_pack.v1",
+    "pack_id": "amos.bank.weekly_liquidity.v1",
+    "workflow_id": "bank_weekly_liquidity_review",
+    "version": "1.0.0",
+    "core_version_requirement": ">=0.2.0, <0.3.0",
+    "effective_start": "2026-08-20T00:00:00Z",
+    "effective_end": null,
+    "status": "approved",
+    "risk_class": "material_internal",
+    "tenant_allowlist": ["tenant_bank_fixture"],
+    "owner": {
+      "owner_id": "synthetic_treasury_data_owner",
+      "role": "data_and_metric_owner",
+      "approved_by": "synthetic_treasury_data_owner",
+      "approved_at": "2026-08-20T00:00:00Z",
+      "approval_reference": "synthetic-fixture-only-no-customer-approval"
+    },
+    "question_families": [
+      {
+        "family_id": "weekly_liquidity_change",
+        "examples": [
+          "What changed in available liquidity and funding this week?",
+          "Which approved liquidity indicators require ALCO attention?"
+        ],
+        "required_parameters": [
+          "comparison_end",
+          "comparison_start",
+          "metric_id",
+          "population",
+          "requested_outputs",
+          "window_end",
+          "window_start"
+        ]
+      }
+    ],
+    "schedule": {
+      "allowed_time_zones": ["America/New_York", "UTC"],
+      "allowed_recurrences": ["weekly"],
+      "owner_required": true
+    },
+    "parameters": {
+      "comparison_end": {
+        "parameter_type": "timestamp",
+        "required": true,
+        "allowed_values": [],
+        "description": "Exclusive end of the approved comparison period."
+      },
+      "comparison_start": {
+        "parameter_type": "timestamp",
+        "required": true,
+        "allowed_values": [],
+        "description": "Inclusive start of the approved comparison period."
+      },
+      "metric_id": {
+        "parameter_type": "string",
+        "required": true,
+        "allowed_values": [
+          "available_liquidity",
+          "cumulative_cash_gap",
+          "wholesale_funding_dependency"
+        ],
+        "description": "One owner-approved metric defined by this pack."
+      },
+      "population": {
+        "parameter_type": "string",
+        "required": true,
+        "allowed_values": ["consolidated_fixture_bank"],
+        "description": "Synthetic legal-entity population; no customer or account detail."
+      },
+      "requested_outputs": {
+        "parameter_type": "string_list",
+        "required": true,
+        "allowed_values": [
+          "direct_answer",
+          "evidence_package",
+          "json_results",
+          "liquidity_report_pdf",
+          "liquidity_review_pptx",
+          "liquidity_workbook"
+        ],
+        "description": "Allowlisted deterministic decision-package outputs."
+      },
+      "window_end": {
+        "parameter_type": "timestamp",
+        "required": true,
+        "allowed_values": [],
+        "description": "Exclusive end of the current review period."
+      },
+      "window_start": {
+        "parameter_type": "timestamp",
+        "required": true,
+        "allowed_values": [],
+        "description": "Inclusive start of the current review period."
+      }
+    },
+    "context_roles": [
+      {
+        "role_id": "metric_definition",
+        "memory_type": "semantic_definition",
+        "required": true,
+        "minimum_consistency": "C1",
+        "minimum_authority": "owner_approved"
+      },
+      {
+        "role_id": "active_schema",
+        "memory_type": "schema",
+        "required": true,
+        "minimum_consistency": "C1",
+        "minimum_authority": "owner_approved"
+      },
+      {
+        "role_id": "data_snapshot",
+        "memory_type": "data_state",
+        "required": true,
+        "minimum_consistency": "C2",
+        "minimum_authority": "system_observed"
+      },
+      {
+        "role_id": "review_policy",
+        "memory_type": "review_policy",
+        "required": true,
+        "minimum_consistency": "C1",
+        "minimum_authority": "owner_approved"
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "synthetic_treasury_warehouse",
+        "connector_type": "sqlite_fixture",
+        "read_only": true,
+        "identity_propagation": "tenant_subject_and_pack",
+        "relations": [
+          {
+            "relation_id": "liquidity_daily",
+            "physical_name": "liquidity_daily",
+            "schema_version": "v1",
+            "sensitivity": "synthetic_internal",
+            "source_version_rule": "schema_hash_plus_snapshot_cutoff",
+            "columns": [
+              {"name": "as_of_date", "data_type": "timestamp", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "legal_entity", "data_type": "text", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "scenario", "data_type": "text", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "available_liquidity_usd", "data_type": "real", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "cumulative_cash_gap_30d_usd", "data_type": "real", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "total_funding_usd", "data_type": "real", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "wholesale_funding_usd", "data_type": "real", "nullable": false, "sensitivity": "synthetic_internal"},
+              {"name": "source_reconciled", "data_type": "boolean", "nullable": false, "sensitivity": "synthetic_internal"}
+            ]
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "metric_id": "available_liquidity",
+        "version": "1",
+        "relation_id": "liquidity_daily",
+        "formula": "sum(available_liquidity_usd)",
+        "unit": "USD",
+        "population_parameter": "population",
+        "time_grain": "daily_cutoff",
+        "required_filters": ["legal_entity = population", "scenario = approved_base", "source_reconciled = true"],
+        "owner_approval": "synthetic-fixture-only-no-customer-approval",
+        "policy_limit": 850000000.0,
+        "early_warning": 950000000.0,
+        "materiality": 25000000.0,
+        "tolerance": 1000.0
+      },
+      {
+        "metric_id": "cumulative_cash_gap",
+        "version": "1",
+        "relation_id": "liquidity_daily",
+        "formula": "sum(cumulative_cash_gap_30d_usd)",
+        "unit": "USD",
+        "population_parameter": "population",
+        "time_grain": "30_day_horizon",
+        "required_filters": ["legal_entity = population", "scenario = approved_base", "source_reconciled = true"],
+        "owner_approval": "synthetic-fixture-only-no-customer-approval",
+        "policy_limit": -400000000.0,
+        "early_warning": -300000000.0,
+        "materiality": 25000000.0,
+        "tolerance": 1000.0
+      },
+      {
+        "metric_id": "wholesale_funding_dependency",
+        "version": "1",
+        "relation_id": "liquidity_daily",
+        "formula": "sum(wholesale_funding_usd) / sum(total_funding_usd)",
+        "unit": "ratio",
+        "population_parameter": "population",
+        "time_grain": "daily_cutoff",
+        "required_filters": ["legal_entity = population", "scenario = approved_base", "source_reconciled = true"],
+        "owner_approval": "synthetic-fixture-only-no-customer-approval",
+        "policy_limit": 0.35,
+        "early_warning": 0.30,
+        "materiality": 0.01,
+        "tolerance": 0.000001
+      }
+    ],
+    "bank_metadata": {
+      "institution_type": "synthetic_bank_fixture",
+      "charter_or_sponsor": "not_applicable_synthetic_fixture",
+      "regulator_or_jurisdiction": ["not_applicable_synthetic_fixture"],
+      "legal_entity": "consolidated_fixture_bank",
+      "business_lines": ["treasury"],
+      "products": ["aggregate_deposits", "wholesale_funding"],
+      "account_or_gl_hierarchy": "synthetic_aggregate_mapping_v1",
+      "currency": "USD",
+      "cutoff_policy": "17:00 America/New_York with reconciled source flag",
+      "liquidity_horizons": ["overnight", "7_day", "30_day"],
+      "reconciliation_rules": ["all rows source_reconciled", "one row per entity scenario cutoff"],
+      "scenarios": ["approved_base", "approved_stress_fixture"],
+      "model_versions": ["authoritative_fixture_inputs_v1"],
+      "collateral_or_funding_classes": ["cash", "unencumbered_securities", "wholesale_funding"]
+    },
+    "plan": {
+      "allowed_tools": ["chart.timeseries.v1", "sql.readonly.v1", "stats.rate_comparison.v1"],
+      "required_context_roles": ["active_schema", "data_snapshot", "metric_definition", "review_policy"],
+      "max_steps": 3,
+      "query_shapes": [
+        {
+          "shape_id": "liquidity_current_and_comparison",
+          "purpose": "Compute approved current and comparison available-liquidity values.",
+          "tool": "sql.readonly.v1",
+          "source_id": "synthetic_treasury_warehouse",
+          "relation_id": "liquidity_daily",
+          "metric_id": "available_liquidity",
+          "sql_template": "SELECT as_of_date, available_liquidity_usd FROM liquidity_daily WHERE as_of_date >= '{{comparison_start}}' AND as_of_date < '{{window_end}}' AND legal_entity = '{{population}}' AND scenario = 'approved_base' AND source_reconciled = 1 ORDER BY as_of_date",
+          "verifier_profile": "bank_weekly_liquidity.v1",
+          "permitted_repairs": ["rename_declared_column"],
+          "limits": {"seconds": 10, "rows": 100, "bytes": 200000}
+        },
+        {
+          "shape_id": "cash_gap_horizon",
+          "purpose": "Compute the approved 30-day cumulative cash gap.",
+          "tool": "sql.readonly.v1",
+          "source_id": "synthetic_treasury_warehouse",
+          "relation_id": "liquidity_daily",
+          "metric_id": "cumulative_cash_gap",
+          "sql_template": "SELECT as_of_date, cumulative_cash_gap_30d_usd FROM liquidity_daily WHERE as_of_date >= '{{window_start}}' AND as_of_date < '{{window_end}}' AND legal_entity = '{{population}}' AND scenario = 'approved_base' AND source_reconciled = 1 ORDER BY as_of_date",
+          "verifier_profile": "bank_weekly_liquidity.v1",
+          "permitted_repairs": ["rename_declared_column"],
+          "limits": {"seconds": 10, "rows": 100, "bytes": 200000}
+        },
+        {
+          "shape_id": "funding_dependency",
+          "purpose": "Compute approved wholesale funding dependency.",
+          "tool": "sql.readonly.v1",
+          "source_id": "synthetic_treasury_warehouse",
+          "relation_id": "liquidity_daily",
+          "metric_id": "wholesale_funding_dependency",
+          "sql_template": "SELECT as_of_date, wholesale_funding_usd, total_funding_usd FROM liquidity_daily WHERE as_of_date >= '{{window_start}}' AND as_of_date < '{{window_end}}' AND legal_entity = '{{population}}' AND scenario = 'approved_base' AND source_reconciled = 1 ORDER BY as_of_date",
+          "verifier_profile": "bank_weekly_liquidity.v1",
+          "permitted_repairs": ["rename_declared_column"],
+          "limits": {"seconds": 10, "rows": 100, "bytes": 200000}
+        }
+      ]
+    },
+    "verifier": {
+      "profile_id": "bank_weekly_liquidity.v1",
+      "required_filters": ["explicit cutoff range", "legal entity population", "approved scenario", "source_reconciled = true"],
+      "reconciliation_rules": ["no duplicate entity scenario cutoff", "current cutoff balances to synthetic control total", "source freshness within 15 minutes"],
+      "permitted_repairs": ["rename_declared_column"],
+      "review_obligations": [
+        {"claim_type": "metric_value", "reviewer_role": "treasury_reviewer", "segregation_of_duties": true},
+        {"claim_type": "limit_state", "reviewer_role": "independent_risk_reviewer", "segregation_of_duties": true},
+        {"claim_type": "management_narrative", "reviewer_role": "treasury_reviewer", "segregation_of_duties": true}
+      ]
+    },
+    "claims": [
+      {"claim_type": "metric_value", "value_schema": "decimal_unit_entity_horizon_cutoff", "required_evidence": ["execution", "metric_definition", "source_version"], "review_required": true},
+      {"claim_type": "limit_state", "value_schema": "value_limit_headroom_state", "required_evidence": ["execution", "metric_definition", "policy_limit", "source_version"], "review_required": true},
+      {"claim_type": "management_narrative", "value_schema": "supported_text_with_limitations", "required_evidence": ["claim_support", "review_record"], "review_required": true}
+    ],
+    "artifacts": [
+      {"output_id": "direct_answer", "kind": "direct_answer", "template_id": "bank_liquidity_answer.v1", "version": "1", "required_claim_types": ["limit_state", "metric_value"], "evidence_links_required": true, "editable": false},
+      {"output_id": "liquidity_report_pdf", "kind": "pdf_report", "template_id": "bank_liquidity_report.v1", "version": "1", "required_claim_types": ["limit_state", "management_narrative", "metric_value"], "evidence_links_required": true, "editable": false},
+      {"output_id": "liquidity_review_pptx", "kind": "pptx", "template_id": "bank_alco_presentation.v1", "version": "1", "required_claim_types": ["limit_state", "management_narrative", "metric_value"], "evidence_links_required": true, "editable": true},
+      {"output_id": "liquidity_workbook", "kind": "xlsx", "template_id": "bank_liquidity_appendix.v1", "version": "1", "required_claim_types": ["metric_value"], "evidence_links_required": true, "editable": true},
+      {"output_id": "json_results", "kind": "json", "template_id": "verified_results.v1", "version": "1", "required_claim_types": ["limit_state", "metric_value"], "evidence_links_required": true, "editable": false},
+      {"output_id": "evidence_package", "kind": "evidence_package", "template_id": "evidence_manifest.v1", "version": "1", "required_claim_types": ["limit_state", "management_narrative", "metric_value"], "evidence_links_required": true, "editable": false}
+    ],
+    "publication": {
+      "review_required": true,
+      "reviewer_roles": ["independent_risk_reviewer", "treasury_reviewer"],
+      "destinations": [
+        {"destination_id": "local_review_staging", "destination_type": "local_object_store", "allowed_artifacts": ["direct_answer", "evidence_package", "json_results", "liquidity_report_pdf", "liquidity_review_pptx", "liquidity_workbook"]}
+      ],
+      "acknowledgment_required": true
+    },
+    "retention": {
+      "retention_days": 2555,
+      "legal_hold_supported": true,
+      "deletion_mode": "tombstone_then_policy_purge",
+      "export_before_delete": true
+    },
+    "evaluation_cases": [
+      {
+        "case_id": "synthetic_liquidity_review_requires_review",
+        "question": "What changed in available liquidity and funding this week?",
+        "parameters": {
+          "comparison_end": "2026-08-14T21:00:00Z",
+          "comparison_start": "2026-08-07T21:00:00Z",
+          "metric_id": "available_liquidity",
+          "population": "consolidated_fixture_bank",
+          "requested_outputs": ["direct_answer", "liquidity_review_pptx", "liquidity_report_pdf", "liquidity_workbook", "json_results", "evidence_package"],
+          "window_end": "2026-08-21T21:00:00Z",
+          "window_start": "2026-08-14T21:00:00Z"
+        },
+        "expected_outcome": "needs_review",
+        "expected_outputs": ["direct_answer", "evidence_package", "json_results", "liquidity_report_pdf", "liquidity_review_pptx", "liquidity_workbook"]
+      }
+    ]
+  },
+  "signatures": [
+    {
+      "algorithm": "ed25519",
+      "key_id": "amos-development-fixture-publisher",
+      "signature_hex": "7b19e1ffb24eb8aa34291421bf628bd44ffd2ba241c8b762d73eebc1b56574deb1bbd8e18dcf292ee63dcd37d7c5b66b94f0704b56405cb175bea13af904f70f"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "tool_id": "dbt.manifest.validate.v1",
+  "display_name": "dbt manifest validator",
+  "description": "Parses and validates bounded dbt manifest metadata without compiling models, opening a warehouse connection, or invoking macros.",
+  "availability": "plan_step",
+  "evaluation_only": true,
+  "runtime": { "kind": "python", "audience": "dbt-worker", "entrypoint": "toolbox:dbt_manifest_validate", "image_digest": null },
+  "operations": ["validate"],
+  "source_policy": { "required": false, "read_only": true, "relations_parameter": null },
+  "parameter_schema": { "type": "object", "properties": {
+    "manifest_json": { "type": "string", "minLength": 2, "maxLength": 10000000 }
+  }, "required": ["manifest_json"], "additionalProperties": false },
+  "output_schema": { "type": "object", "properties": {
+    "valid": { "type": "boolean" }, "node_count": { "type": "integer", "minimum": 0 },
+    "resource_counts": { "type": "object", "properties": {}, "additionalProperties": true },
+    "invalid_node_ids": { "type": "array", "items": { "type": "string" }, "maxItems": 50000 },
+    "dbt_schema_version": { "type": "string" }, "dbt_version": { "type": "string" }
+  }, "required": ["valid", "node_count", "resource_counts", "invalid_node_ids", "dbt_schema_version", "dbt_version"], "additionalProperties": false },
+  "resource_limits": { "max_seconds": 60, "max_rows": 50000, "max_bytes": 10000000, "max_memory_mb": 1024 },
+  "network_policy": "deny_all",
+  "determinism": { "deterministic": true, "seed_parameter": null, "records_runtime_version": true },
+  "verifier_profile": "dbt.manifest.validate.v1"
+}

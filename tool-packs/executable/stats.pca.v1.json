@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "tool_id": "stats.pca.v1",
+  "display_name": "Principal component analysis",
+  "description": "Runs deterministic full-SVD principal component analysis on a bounded numeric matrix.",
+  "availability": "plan_step", "evaluation_only": true,
+  "runtime": { "kind": "python", "audience": "stats-worker", "entrypoint": "toolbox:pca", "image_digest": null },
+  "operations": ["analyze"],
+  "source_policy": { "required": false, "read_only": true, "relations_parameter": null },
+  "parameter_schema": { "type": "object", "properties": {
+    "matrix": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 128 }, "minItems": 2, "maxItems": 50000 },
+    "components": { "type": "integer", "minimum": 1, "maximum": 128 }
+  }, "required": ["matrix", "components"], "additionalProperties": false },
+  "output_schema": { "type": "object", "properties": {
+    "components": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 128 }, "minItems": 1, "maxItems": 128 },
+    "explained_variance": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 128 },
+    "explained_variance_ratio": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 128 },
+    "transformed": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 128 }, "minItems": 2, "maxItems": 50000 }
+  }, "required": ["components", "explained_variance", "explained_variance_ratio", "transformed"], "additionalProperties": false },
+  "resource_limits": { "max_seconds": 120, "max_rows": 50000, "max_bytes": 50000000, "max_memory_mb": 2048 },
+  "network_policy": "deny_all",
+  "determinism": { "deterministic": true, "seed_parameter": null, "records_runtime_version": true },
+  "verifier_profile": "stats.pca.v1"
+}

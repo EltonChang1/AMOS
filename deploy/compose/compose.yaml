@@ -1,0 +1,102 @@
+name: amos
+
+services:
+  amos:
+    image: ${AMOS_IMAGE:-amos:0.2.0-evaluation}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        AMOS_VERSION: ${AMOS_VERSION:-0.2.0}
+    command: ["--config", "/etc/amos/server.json", "serve"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: "10001:10001"
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: ${AMOS_MEMORY_LIMIT:-2g}
+    cpus: ${AMOS_CPU_LIMIT:-2.0}
+    stop_grace_period: 30s
+    ports:
+      - "${AMOS_BIND_HOST:-127.0.0.1}:${AMOS_PORT:-8000}:8000"
+    depends_on:
+      toolbox:
+        condition: service_healthy
+    environment:
+      RUST_LOG: ${AMOS_LOG_LEVEL:-amos=info,tower_http=info}
+    volumes:
+      - amos-data:/var/lib/amos
+      - ./config/server.json:/etc/amos/server.json:ro
+    secrets:
+      - capability_key
+      - identities
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/amosctl", "health", "--host", "127.0.0.1", "--port", "8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - frontend
+      - toolbox
+
+  toolbox:
+    image: ${AMOS_TOOLBOX_IMAGE:-amos-toolbox:0.2.0-evaluation}
+    build:
+      context: ../..
+      dockerfile: toolbox/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: "10002:10002"
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${AMOS_TOOLBOX_MEMORY_LIMIT:-4g}
+    cpus: ${AMOS_TOOLBOX_CPU_LIMIT:-2.0}
+    stop_grace_period: 30s
+    environment:
+      AMOS_CAPABILITY_KEY_FILE: /run/secrets/capability_key
+      JAVA_TOOL_OPTIONS: ${AMOS_TOOLBOX_JAVA_OPTIONS:--Xms128m -Xmx2048m}
+    secrets:
+      - capability_key
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - toolbox
+
+volumes:
+  amos-data:
+
+networks:
+  frontend:
+  toolbox:
+    internal: true
+
+secrets:
+  capability_key:
+    file: ./secrets/capability-key
+  identities:
+    file: ./secrets/identities.json

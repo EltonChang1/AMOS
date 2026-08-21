@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "tool_id": "spreadsheet.xlsx.v1",
+  "display_name": "Editable XLSX workbook",
+  "description": "Compiles bounded worksheet specifications into an editable XLSX artifact without formulas, macros, or external links.",
+  "availability": "plan_step", "evaluation_only": true,
+  "runtime": { "kind": "python", "audience": "spreadsheet-worker", "entrypoint": "toolbox:spreadsheet", "image_digest": null },
+  "operations": ["render"],
+  "source_policy": { "required": false, "read_only": true, "relations_parameter": null },
+  "parameter_schema": { "type": "object", "properties": {
+    "sheets": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "object", "properties": {
+      "title": { "type": "string", "minLength": 1, "maxLength": 31 },
+      "rows": { "type": "array", "items": { "type": "array", "items": { "type": "scalar" }, "minItems": 1, "maxItems": 256 }, "minItems": 1, "maxItems": 50000 },
+      "freeze_header": { "type": "boolean" }
+    }, "required": ["title", "rows", "freeze_header"], "additionalProperties": false } }
+  }, "required": ["sheets"], "additionalProperties": false },
+  "output_schema": { "type": "object", "properties": {
+    "media_type": { "type": "string" }, "extension": { "type": "string", "enum": ["xlsx"] }, "bytes": { "type": "integer", "minimum": 1 },
+    "sha256": { "type": "string", "minLength": 64, "maxLength": 64 }, "base64": { "type": "string", "minLength": 1 }
+  }, "required": ["media_type", "extension", "bytes", "sha256", "base64"], "additionalProperties": false },
+  "resource_limits": { "max_seconds": 120, "max_rows": 50000, "max_bytes": 50000000, "max_memory_mb": 2048 },
+  "network_policy": "deny_all",
+  "determinism": { "deterministic": false, "seed_parameter": null, "records_runtime_version": true },
+  "verifier_profile": "spreadsheet.xlsx.v1"
+}

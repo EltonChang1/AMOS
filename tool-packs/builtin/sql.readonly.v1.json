@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "tool_id": "sql.readonly.v1",
+  "display_name": "Read-only SQL",
+  "description": "Executes one capability-bound, verified, read-only SQL query against an approved source.",
+  "availability": "plan_step",
+  "evaluation_only": false,
+  "runtime": {
+    "kind": "sql",
+    "audience": "sql-worker",
+    "entrypoint": "builtin:sql-readonly",
+    "image_digest": null
+  },
+  "operations": ["query"],
+  "source_policy": {
+    "required": true,
+    "read_only": true,
+    "relations_parameter": "relations"
+  },
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "sql": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32768
+      },
+      "relations": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "minItems": 1,
+        "maxItems": 64,
+        "uniqueItems": true
+      }
+    },
+    "required": ["sql", "relations"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": true
+    },
+    "maxItems": 50000
+  },
+  "resource_limits": {
+    "max_seconds": 300,
+    "max_rows": 50000,
+    "max_bytes": 5000000,
+    "max_memory_mb": 1024
+  },
+  "network_policy": "source_only",
+  "determinism": {
+    "deterministic": true,
+    "seed_parameter": null,
+    "records_runtime_version": true
+  },
+  "verifier_profile": "sql.readonly.v1"
+}

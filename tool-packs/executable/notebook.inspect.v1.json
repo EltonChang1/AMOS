@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "tool_id": "notebook.inspect.v1",
+  "display_name": "Notebook inspector",
+  "description": "Parses a bounded Jupyter notebook and records cell metadata and code hashes; it never executes notebook cells.",
+  "availability": "plan_step", "evaluation_only": true,
+  "runtime": { "kind": "python", "audience": "notebook-worker", "entrypoint": "toolbox:notebook_inspect", "image_digest": null },
+  "operations": ["inspect"],
+  "source_policy": { "required": false, "read_only": true, "relations_parameter": null },
+  "parameter_schema": { "type": "object", "properties": {
+    "notebook_json": { "type": "string", "minLength": 2, "maxLength": 10000000 }
+  }, "required": ["notebook_json"], "additionalProperties": false },
+  "output_schema": { "type": "object", "properties": {
+    "format": { "type": "string" }, "cell_count": { "type": "integer", "minimum": 0 },
+    "cell_counts": { "type": "object", "properties": {}, "additionalProperties": true },
+    "code_hashes": { "type": "array", "items": { "type": "string" }, "maxItems": 10000 },
+    "executed": { "type": "boolean", "enum": [false] }
+  }, "required": ["format", "cell_count", "cell_counts", "code_hashes", "executed"], "additionalProperties": false },
+  "resource_limits": { "max_seconds": 30, "max_rows": 10000, "max_bytes": 10000000, "max_memory_mb": 512 },
+  "network_policy": "deny_all",
+  "determinism": { "deterministic": true, "seed_parameter": null, "records_runtime_version": true },
+  "verifier_profile": "notebook.inspect.v1"
+}

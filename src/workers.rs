@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::{Read, Write},
+    net::TcpStream,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -12,6 +14,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use rusqlite::{Connection, types::ValueRef};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::Sha256;
 
@@ -22,6 +25,7 @@ use crate::{
         PlanStep, TypedPlan, content_hash, new_id,
     },
     error::AmosError,
+    tools::{ToolManifest, ToolRegistry},
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -52,19 +56,38 @@ impl CapabilityIssuer {
         step: &PlanStep,
         fencing_token: u64,
     ) -> Result<CapabilityEnvelope> {
+        let registry = ToolRegistry::builtins()?;
+        let manifest = registry.get(&step.tool)?;
+        self.issue_for_tool(identity, plan, step, fencing_token, manifest)
+    }
+
+    pub fn issue_for_tool(
+        &self,
+        identity: &Identity,
+        plan: &TypedPlan,
+        step: &PlanStep,
+        fencing_token: u64,
+        manifest: &ToolManifest,
+    ) -> Result<CapabilityEnvelope> {
+        if manifest.tool_id != step.tool {
+            return Err(AmosError::Capability(
+                "tool manifest does not match the requested plan step".into(),
+            ));
+        }
         let now = Utc::now().timestamp();
-        let relations = declared_relations(step)?;
+        let relations = declared_relations(step, manifest)?;
         let claims = CapabilityClaims {
             issuer: self.issuer.clone(),
-            audience: audience(&step.tool),
+            audience: manifest.runtime.audience.clone(),
             tenant_id: identity.tenant_id.clone(),
             atxn_id: plan.atxn_id.clone(),
             plan_id: plan.plan_id.clone(),
             step_id: step.step_id.clone(),
+            step_hash: content_hash(step)?,
             subject_id: identity.subject_id.clone(),
             tool: step.tool.clone(),
             source_id: step.source_id.clone(),
-            operations: BTreeSet::from(["query".into()]),
+            operations: manifest.operations.clone(),
             relations,
             limits: CapabilityLimits {
                 seconds: step.limits.seconds,
@@ -124,6 +147,172 @@ impl CapabilityIssuer {
             .map_err(|e| AmosError::Capability(e.to_string()))?;
         mac.update(&serde_json::to_vec(claims)?);
         Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+    }
+}
+
+#[derive(Clone)]
+pub struct ToolboxWorker {
+    endpoint: String,
+    issuer: CapabilityIssuer,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolboxResponse {
+    status: String,
+    tool_id: String,
+    toolbox_version: String,
+    runtime_versions: BTreeMap<String, String>,
+    output: Value,
+    row_count: u64,
+    byte_count: u64,
+    latency_ms: u64,
+}
+
+#[derive(Serialize)]
+struct ToolboxRequest<'a> {
+    identity: &'a Identity,
+    plan: &'a TypedPlan,
+    step: &'a PlanStep,
+    fencing_token: u64,
+    capability: &'a CapabilityEnvelope,
+}
+
+impl ToolboxWorker {
+    pub fn new(endpoint: impl Into<String>, issuer: CapabilityIssuer) -> Result<Self> {
+        let endpoint = endpoint.into();
+        let valid = endpoint.rsplit_once(':').is_some_and(|(host, port)| {
+            !host.is_empty()
+                && !host.chars().any(char::is_whitespace)
+                && port.parse::<u16>().is_ok_and(|port| port > 0)
+        });
+        if !valid || endpoint.contains('/') {
+            return Err(AmosError::Validation(
+                "toolbox endpoint must use host:port without a URL path".into(),
+            ));
+        }
+        Ok(Self { endpoint, issuer })
+    }
+
+    pub fn execute(
+        &self,
+        identity: &Identity,
+        plan: &TypedPlan,
+        step: &PlanStep,
+        manifest: &ToolManifest,
+        capability: &CapabilityEnvelope,
+        fence: u64,
+    ) -> Result<ExecutionRecord> {
+        self.issuer.validate(
+            capability,
+            &manifest.runtime.audience,
+            identity.policy_epoch,
+            fence,
+        )?;
+        validate_tool_bindings(identity, plan, step, manifest, capability, fence)?;
+
+        let body = serde_json::to_vec(&ToolboxRequest {
+            identity,
+            plan,
+            step,
+            fencing_token: fence,
+            capability,
+        })?;
+        let timeout = Duration::from_secs(step.limits.seconds.saturating_add(5).clamp(5, 905));
+        let mut stream = TcpStream::connect(&self.endpoint)
+            .map_err(|error| AmosError::Execution(format!("toolbox connection failed: {error}")))?;
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
+        stream.write_all(
+            format!(
+                "POST /execute HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                self.endpoint,
+                body.len()
+            )
+            .as_bytes(),
+        )?;
+        stream.write_all(&body)?;
+
+        let response_limit = step.limits.bytes.saturating_add(1_000_000).min(60_000_000);
+        let mut raw = Vec::new();
+        stream
+            .take(response_limit.saturating_add(1))
+            .read_to_end(&mut raw)?;
+        if raw.len() as u64 > response_limit {
+            return Err(AmosError::Execution(
+                "toolbox response exceeded the transport limit".into(),
+            ));
+        }
+        let header_end = raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .ok_or_else(|| AmosError::Execution("toolbox returned malformed HTTP".into()))?;
+        let headers = std::str::from_utf8(&raw[..header_end])
+            .map_err(|_| AmosError::Execution("toolbox returned non-UTF-8 HTTP headers".into()))?;
+        let status = headers.lines().next().unwrap_or_default();
+        let response_body = &raw[header_end + 4..];
+        if !status.contains(" 200 ") {
+            let safe_error = serde_json::from_slice::<Value>(response_body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| "toolbox rejected execution".into());
+            return Err(AmosError::Execution(safe_error));
+        }
+        let response: ToolboxResponse = serde_json::from_slice(response_body)?;
+        if response.status != "pass"
+            || response.tool_id != step.tool
+            || response.toolbox_version.trim().is_empty()
+        {
+            return Err(AmosError::Execution(
+                "toolbox response identity or status mismatch".into(),
+            ));
+        }
+        let encoded_output = serde_json::to_vec(&response.output)?;
+        let expected_rows = response
+            .output
+            .as_array()
+            .map_or(1, |values| values.len() as u64);
+        if response.byte_count != encoded_output.len() as u64
+            || response.row_count != expected_rows
+            || response.byte_count > step.limits.bytes
+            || response.row_count > step.limits.rows
+        {
+            return Err(AmosError::Execution(
+                "toolbox response accounting or resource limit mismatch".into(),
+            ));
+        }
+        let mut input_versions = response
+            .runtime_versions
+            .into_iter()
+            .map(|(name, version)| (format!("runtime:{name}"), version))
+            .collect::<BTreeMap<_, _>>();
+        input_versions.insert("runtime:toolbox".into(), response.toolbox_version);
+        Ok(ExecutionRecord {
+            execution_id: new_id("exec"),
+            tenant_id: identity.tenant_id.clone(),
+            atxn_id: plan.atxn_id.clone(),
+            plan_id: plan.plan_id.clone(),
+            step_id: step.step_id.clone(),
+            tool: step.tool.clone(),
+            tool_version: manifest.tool_id.clone(),
+            capability_id: capability.claims.token_id.clone(),
+            parameters: step.parameters.clone(),
+            parameters_hash: content_hash(&step.parameters)?,
+            input_versions,
+            output: response.output.clone(),
+            output_hash: content_hash(&response.output)?,
+            row_count: response.row_count,
+            byte_count: response.byte_count,
+            latency_ms: response.latency_ms,
+            fencing_token: fence,
+            status: response.status,
+            created_at: Utc::now(),
+        })
     }
 }
 
@@ -346,12 +535,15 @@ impl ChartWorker {
     }
 }
 
-fn declared_relations(step: &PlanStep) -> Result<BTreeSet<String>> {
+fn declared_relations(step: &PlanStep, manifest: &ToolManifest) -> Result<BTreeSet<String>> {
+    let Some(parameter) = manifest.source_policy.relations_parameter.as_deref() else {
+        return Ok(BTreeSet::new());
+    };
     let values = step
         .parameters
-        .get("relations")
+        .get(parameter)
         .and_then(Value::as_array)
-        .ok_or_else(|| AmosError::Validation("step must declare relations".into()))?;
+        .ok_or_else(|| AmosError::Validation("source-backed step must declare relations".into()))?;
     values
         .iter()
         .map(|value| {
@@ -366,6 +558,48 @@ fn declared_relations(step: &PlanStep) -> Result<BTreeSet<String>> {
                 })
         })
         .collect()
+}
+
+fn validate_tool_bindings(
+    identity: &Identity,
+    plan: &TypedPlan,
+    step: &PlanStep,
+    manifest: &ToolManifest,
+    capability: &CapabilityEnvelope,
+    fence: u64,
+) -> Result<()> {
+    let claims = &capability.claims;
+    let expected_limits = CapabilityLimits {
+        seconds: step.limits.seconds,
+        rows: step.limits.rows,
+        bytes: step.limits.bytes,
+    };
+    let plan_step_matches = plan
+        .steps
+        .iter()
+        .find(|candidate| candidate.step_id == step.step_id)
+        == Some(step);
+    if identity.tenant_id != plan.tenant_id
+        || claims.tenant_id != identity.tenant_id
+        || claims.atxn_id != plan.atxn_id
+        || claims.plan_id != plan.plan_id
+        || claims.step_id != step.step_id
+        || claims.step_hash != content_hash(step)?
+        || claims.subject_id != identity.subject_id
+        || claims.tool != step.tool
+        || claims.source_id != step.source_id
+        || claims.operations != manifest.operations
+        || claims.relations != declared_relations(step, manifest)?
+        || claims.limits != expected_limits
+        || claims.policy_epoch != identity.policy_epoch
+        || claims.fencing_token != fence
+        || !plan_step_matches
+    {
+        return Err(AmosError::Capability(
+            "capability is not fully bound to the invoked plan step".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_sql_bindings(
@@ -396,7 +630,12 @@ fn validate_sql_bindings(
         || claims.tool != step.tool
         || claims.source_id != step.source_id
         || claims.operations != expected_operations
-        || claims.relations != declared_relations(step)?
+        || claims.relations
+            != declared_relations(
+                step,
+                &ToolRegistry::builtins()?.get("sql.readonly.v1")?.clone(),
+            )?
+        || claims.step_hash != content_hash(step)?
         || claims.limits != expected_limits
         || claims.limits.seconds == 0
         || claims.limits.rows == 0
@@ -412,16 +651,6 @@ fn validate_sql_bindings(
     Ok(())
 }
 
-fn audience(tool: &str) -> String {
-    if tool.starts_with("sql.") {
-        "sql-worker"
-    } else if tool.starts_with("stats.") {
-        "stats-worker"
-    } else {
-        "chart-worker"
-    }
-    .into()
-}
 fn sql_value(value: ValueRef<'_>) -> Result<Value> {
     Ok(match value {
         ValueRef::Null => Value::Null,
@@ -545,6 +774,7 @@ mod tests {
             Box::new(|claims| claims.atxn_id = "other".into()),
             Box::new(|claims| claims.plan_id = "other".into()),
             Box::new(|claims| claims.step_id = "other".into()),
+            Box::new(|claims| claims.step_hash = "sha256:00".into()),
             Box::new(|claims| claims.subject_id = "other".into()),
             Box::new(|claims| claims.tool = "chart.timeseries.v1".into()),
             Box::new(|claims| claims.source_id = "other".into()),

@@ -4,6 +4,7 @@ pub mod api;
 pub mod auth;
 pub mod connectors;
 pub mod context;
+pub mod deployment;
 pub mod domain;
 pub mod error;
 pub mod evidence;
@@ -14,7 +15,9 @@ pub mod publication;
 pub mod runtime;
 pub mod scheduler;
 pub mod seed;
+pub mod solution_pack;
 pub mod store;
+pub mod tools;
 pub mod verification;
 pub mod workers;
 
