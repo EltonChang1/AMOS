@@ -8,7 +8,8 @@ Working branch: `finance` (never `main` or `MVP`)
 
 ## Current execution item
 
-**Phase 2 — signed domain-neutral solution-pack foundation.** The typed
+**Phase 2 — signed domain-neutral solution-pack foundation.** Commit `0858d9b`
+completed the typed
 contract, Ed25519 signature/trust boundary, validation and signing CLI, two
 signed synthetic packs, authoring guide, and fail-closed tests are implemented
 in the current working increment. Runtime activation, persistent pack history,
@@ -148,8 +149,8 @@ decision is claimed without external evidence.
 
 ## Git state and next action
 
-- Last committed baseline: `d44e971` (`Tailor MVP plan to banking finance`).
-- Current increment: verified locally and ready for a scoped commit.
-- Next recommended action: finish full qualification for this increment, commit
-  and push it to `origin/finance`, then implement durable solution-pack
-  activation and runtime routing.
+- Last verified implementation commit: `0858d9b` (`Add signed banking
+  solution-pack contracts`).
+- Current ledger update records that implementation commit before push.
+- Next recommended action: push the verified commits to `origin/finance`, then
+  implement durable solution-pack activation and runtime routing.
